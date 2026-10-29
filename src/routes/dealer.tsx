@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { PortalShell, MetricCard } from "@/components/PortalShell";
 import { StatusBadge } from "@/components/StatusBadge";
+import { isBrowserSupabaseConfigured } from "@/integrations/client";
 import {
   createCarWithImportCosts,
   deactivateDealerWorker,
@@ -58,6 +59,7 @@ function DealerConsole() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const loadDashboard = useServerFn(getDealerDashboard);
   const deactivateWorker = useServerFn(deactivateDealerWorker);
+  const canAuthenticate = isBrowserSupabaseConfigured();
 
   async function loadOwnerDashboard() {
     setLoadingDashboard(true);
@@ -156,9 +158,11 @@ function DealerConsole() {
             <button
               type="button"
               onClick={() => setCostingOpen(true)}
+              disabled={!canAuthenticate}
+              title={!canAuthenticate ? "Configure Supabase sign-in to save vehicle records." : undefined}
               className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
             >
-              Vehicle Sourcing &amp; Costing
+              {canAuthenticate ? "Vehicle Sourcing & Costing" : "Supabase sign-in required"}
             </button>
           </div>
           <div className="grid gap-4 xl:grid-cols-4">
@@ -197,7 +201,11 @@ function DealerConsole() {
               );
             })}
           </div>
-          <CostingDialog open={costingOpen} onOpenChange={setCostingOpen} />
+          <CostingDialog
+            open={costingOpen}
+            onOpenChange={setCostingOpen}
+            canAuthenticate={canAuthenticate}
+          />
         </section>
       ) : (
         <section>
@@ -222,6 +230,7 @@ function DealerConsole() {
               vehicles={vehicles}
               liveLogs={liveDashboard?.logs ?? null}
               loading={loadingDashboard}
+              canAuthenticate={canAuthenticate}
               onLoadLiveData={() => void loadOwnerDashboard()}
             />
           ) : (
@@ -230,6 +239,7 @@ function DealerConsole() {
               onToggle={toggleStaff}
               liveStaff={liveDashboard?.staff ?? null}
               loading={loadingDashboard}
+              canAuthenticate={canAuthenticate}
               onLoadLiveData={() => void loadOwnerDashboard()}
               onDeactivateLiveWorker={(id) => void deactivateLiveWorker(id)}
             />
@@ -244,11 +254,13 @@ function OwnerOverview({
   vehicles,
   liveLogs,
   loading,
+  canAuthenticate,
   onLoadLiveData,
 }: {
   vehicles: Awaited<ReturnType<typeof listPublicVehicles>>;
   liveLogs: Awaited<ReturnType<typeof getDealerDashboard>>["logs"] | null;
   loading: boolean;
+  canAuthenticate: boolean;
   onLoadLiveData: () => void;
 }) {
   const inventoryValue = vehicles.reduce((total, vehicle) => total + vehicle.price_ksh, 0);
@@ -293,7 +305,12 @@ function OwnerOverview({
           </div>
         </div>
 
-        <AuditTable logs={liveLogs} loading={loading} onLoadLiveData={onLoadLiveData} />
+        <AuditTable
+          logs={liveLogs}
+          loading={loading}
+          canAuthenticate={canAuthenticate}
+          onLoadLiveData={onLoadLiveData}
+        />
       </section>
     </div>
   );
@@ -302,10 +319,12 @@ function OwnerOverview({
 function AuditTable({
   logs,
   loading,
+  canAuthenticate,
   onLoadLiveData,
 }: {
   logs: Awaited<ReturnType<typeof getDealerDashboard>>["logs"] | null;
   loading: boolean;
+  canAuthenticate: boolean;
   onLoadLiveData: () => void;
 }) {
   return (
@@ -320,10 +339,16 @@ function AuditTable({
         <button
           type="button"
           onClick={onLoadLiveData}
-          disabled={loading}
+          disabled={loading || !canAuthenticate}
           className="shrink-0 rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50"
         >
-          {loading ? "Loading…" : logs ? "Refresh" : "Load live"}
+          {!canAuthenticate
+            ? "Supabase sign-in required"
+            : loading
+              ? "Loading…"
+              : logs
+                ? "Refresh"
+                : "Load live"}
         </button>
       </div>
       <div className="mt-4 space-y-3">
@@ -361,6 +386,7 @@ function StaffTable({
   onToggle,
   liveStaff,
   loading,
+  canAuthenticate,
   onLoadLiveData,
   onDeactivateLiveWorker,
 }: {
@@ -368,6 +394,7 @@ function StaffTable({
   onToggle: (id: string) => void;
   liveStaff: Awaited<ReturnType<typeof getDealerDashboard>>["staff"] | null;
   loading: boolean;
+  canAuthenticate: boolean;
   onLoadLiveData: () => void;
   onDeactivateLiveWorker: (id: string) => void;
 }) {
@@ -407,10 +434,16 @@ function StaffTable({
       <button
         type="button"
         onClick={onLoadLiveData}
-        disabled={loading}
+        disabled={loading || !canAuthenticate}
         className="mb-4 rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50"
       >
-        {loading ? "Loading…" : liveStaff ? "Refresh live staff" : "Load live staff"}
+        {!canAuthenticate
+          ? "Supabase sign-in required"
+          : loading
+            ? "Loading…"
+            : liveStaff
+              ? "Refresh live staff"
+              : "Load live staff"}
       </button>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[620px] text-left text-sm">
@@ -471,9 +504,11 @@ function StaffTable({
 function CostingDialog({
   open,
   onOpenChange,
+  canAuthenticate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  canAuthenticate: boolean;
 }) {
   const saveCar = useServerFn(createCarWithImportCosts);
   const [busy, setBusy] = useState(false);
@@ -536,7 +571,7 @@ function CostingDialog({
         <DialogHeader>
           <DialogTitle>Vehicle Sourcing &amp; Costing</DialogTitle>
           <DialogDescription>
-            Costs total automatically. Saving requires an authenticated yard owner or manager.
+            Costs total automatically. Saving requires Supabase sign-in and an authorized yard owner or manager.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
@@ -582,10 +617,14 @@ function CostingDialog({
           </div>
           <button
             type="submit"
-            disabled={busy}
+            disabled={busy || !canAuthenticate}
             className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
-            {busy ? "Saving…" : "Save vehicle and costs"}
+            {!canAuthenticate
+              ? "Supabase sign-in required"
+              : busy
+                ? "Saving…"
+                : "Save vehicle and costs"}
           </button>
         </form>
       </DialogContent>
