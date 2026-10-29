@@ -49,7 +49,7 @@ function CarDetails() {
   const [idx, setIdx] = useState(0);
   const [open, setOpen] = useState(false);
   if (!v) return null;
-  const imgs = v.images.length ? v.images : ["/images/cars/prado.jpg"];
+  const imgs = v.images.length ? v.images : ["/cars/prado.jpg"];
   const title = `${v.year} ${v.make} ${v.model}`;
   const waText = encodeURIComponent(`Hi, I'm interested in the ${title} (${formatKsh(v.price_ksh)}) on VroomLink.${ref ? ` Ref: ${ref}` : ""}`);
   const waPhone = v.yard?.whatsapp_phone ?? "254700000000";

@@ -7,6 +7,9 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
+  nitro: {
+    preset: "node-server",
+  },
   // Pre-bundle client deps so Vite never re-optimizes mid-session (which loads two React copies).
   vite: {
     optimizeDeps: {
