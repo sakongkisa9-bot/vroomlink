@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
   type ErrorComponentProps,
@@ -127,7 +128,8 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient, systemActive } = Route.useRouteContext();
-  if (!systemActive) return <MaintenanceScreen />;
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  if (!systemActive && pathname !== "/developer") return <MaintenanceScreen />;
 
   return (
     <QueryClientProvider client={queryClient}>

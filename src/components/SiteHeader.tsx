@@ -1,5 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { Search } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export function SiteHeader({ q, onSearch }: { q?: string | undefined; onSearch?: (q: string) => void }) {
   return (
@@ -19,6 +27,25 @@ export function SiteHeader({ q, onSearch }: { q?: string | undefined; onSearch?:
             />
           </label>
         )}
+        <DropdownMenu>
+          <DropdownMenuTrigger className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border bg-card px-4 text-sm font-semibold shadow-sm outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
+            Portal Access
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>VroomLink Portals</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to="/broker">Broker Dashboard</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/dealer">Car Dealer Console</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/developer">Developer Admin Panel</Link>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

@@ -286,3 +286,103 @@ export const recordSubscriptionPayment = createServerFn({ method: "POST" })
       },
     );
   });
+
+const dealerDashboardSchema = z.object({ dealerId: uuid });
+
+export const getDealerDashboard = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof dealerDashboardSchema>) =>
+  dealerDashboardSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+  const actor = principal(context);
+  return withRailwayTransaction(actor, async (transaction) => {
+    await assertDealerWorker(transaction, data.dealerId, actor.userId, [
+      "OWNER",
+      "YARD_MANAGER",
+    ]);
+
+    const cars = await transaction<{
+      id: string;
+      brand: string;
+      model: string;
+      year: number;
+      selling_price: string;
+      status_badge: "PURCHASED" | "ON_OCEAN" | "PORT_CLEARING" | "IN_YARD";
+      chassis_number: string | null;
+    }[]>`
+      select id, brand, model, year, selling_price::text, status_badge, chassis_number
+      from cars
+      where dealer_id = ${data.dealerId}
+      order by created_at desc
+      limit 100
+    `;
+
+    const staff = await transaction<{
+      id: string;
+      full_name: string;
+      email: string;
+      workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+      is_active: boolean;
+    }[]>`
+      select id, full_name, email, workspace_role, is_active
+      from workers
+      where dealer_id = ${data.dealerId}
+      order by created_at asc
+    `;
+
+    const logs = await transaction<{
+      id: string;
+      worker_email: string;
+      action_performed: string;
+      record_id: string;
+      timestamp: string;
+    }[]>`
+      select id, worker_email, action_performed, record_id, "timestamp"::text
+      from system_logs
+      where dealer_id = ${data.dealerId}
+      order by "timestamp" desc
+      limit 50
+    `;
+
+    return { cars, staff, logs };
+  });
+  });
+
+export const getDeveloperDashboard = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+  await assertSuperAdmin(context);
+  const actor = principal(context);
+  return withRailwayTransaction(
+    { ...actor, superAdmin: true, allowMaintenance: true },
+    async (transaction) => {
+      const dealers = await transaction<{
+        id: string;
+        showroom_name: string;
+        location: string;
+        subscription_status: "ACTIVE" | "EXPIRED";
+        subscription_expires_at: string;
+      }[]>`
+        select id, showroom_name, location, subscription_status, subscription_expires_at::text
+        from dealers
+        order by subscription_expires_at desc
+        limit 100
+      `;
+
+      const payments = await transaction<{
+        provider: "stripe" | "mpesa";
+        amount_ksh: string;
+        paid_at: string;
+      }[]>`
+        select provider, amount_ksh::text, paid_at::text
+        from subscription_events
+        where paid_at >= date_trunc('month', now())
+        order by paid_at desc
+        limit 200
+      `;
+
+      return { dealers, payments };
+    },
+  );
+  });
