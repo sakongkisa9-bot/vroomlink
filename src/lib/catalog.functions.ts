@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import type { Database } from "@/integrations/supabase/types";
+import type { Database } from "@/integrations/types";
 
 export type VehicleStatus = Database["public"]["Enums"]["vehicle_status"];
 
@@ -86,7 +86,7 @@ export const createBookingDeposit = createServerFn({ method: "POST" })
     if (status && !status.is_system_active) throw new Error("System under maintenance");
     const { data: v } = await pub.from("vehicles").select("id, booking_deposit_ksh").eq("id", data.vehicleId).maybeSingle();
     if (!v) throw new Error("Vehicle not found");
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { supabaseAdmin } = await import("@/integrations/client.server");
     const { data: row, error } = await supabaseAdmin
       .from("booking_deposits")
       .insert({
