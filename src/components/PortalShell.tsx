@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { SiteHeader } from "@/components/SiteHeader";
-import { isBrowserSupabaseConfigured } from "@/integrations/client";
 
 type PortalShellProps = {
   title: string;
@@ -22,15 +21,9 @@ export function PortalShell({ title, description, children }: PortalShellProps) 
             <h1 className="mt-3 text-3xl font-bold tracking-tight">{title}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{description}</p>
           </div>
-          <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-800">
-            {isBrowserSupabaseConfigured() ? "Demo workspace" : "Read-only demo"}
+          <span className="rounded-full border bg-card px-3 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Role workspace
           </span>
-        </div>
-        <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-          Demo interface: role switches and sample records are for preview only.
-          {isBrowserSupabaseConfigured()
-            ? " Protected changes require a signed-in, authorized account."
-            : " Supabase browser keys are not configured, so protected data and actions are unavailable. Configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY to sign in."}
         </div>
         {children}
       </main>

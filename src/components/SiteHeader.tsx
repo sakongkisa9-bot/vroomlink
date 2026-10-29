@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, Search } from "lucide-react";
+import { PortalAuthControl } from "@/components/PortalAuthControl";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,6 +47,7 @@ export function SiteHeader({ q, onSearch }: { q?: string | undefined; onSearch?:
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <PortalAuthControl />
       </div>
     </header>
   );

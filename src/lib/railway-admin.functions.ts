@@ -11,7 +11,7 @@ const uuid = z.string().uuid();
 const money = z.number().int().safe().nonnegative();
 
 const createCarSchema = z.object({
-  dealerId: uuid,
+  dealerId: uuid.optional(),
   brand: z.string().trim().min(1).max(80),
   model: z.string().trim().min(1).max(120),
   chassisNumber: z.string().trim().min(1).max(100).nullable().optional(),
@@ -33,12 +33,32 @@ const createCarSchema = z.object({
   kraImportDuty: money,
   portClearanceFees: money,
   flatbedTransport: money,
+  brokerWholesalePrice: money,
+  brokerCommissionRatePercent: z.number().min(0).max(100),
+});
+
+const submitBrokerLeadSchema = z.object({
+  carId: uuid,
+  customerName: z.string().trim().min(1).max(160),
+  customerPhone: z
+    .string()
+    .trim()
+    .min(7)
+    .max(24)
+    .regex(/^[+()\d\s-]+$/),
+});
+
+const recordVehicleSaleSchema = z.object({
+  carId: uuid,
+  brokerWorkerId: uuid.nullable(),
+  finalSalePrice: money.positive(),
 });
 
 type AuthContext = {
   userId: string;
   claims: { email?: unknown };
   supabase: SupabaseClient<Database>;
+  accessToken: string;
 };
 
 function principal(context: { userId: string; claims: { email?: unknown } }) {
@@ -95,6 +115,35 @@ async function assertDealerWorker(
   };
 }
 
+async function resolveCurrentDealerId(
+  transaction: TransactionSql,
+  userId: string,
+  requestedDealerId?: string,
+  allowedRoles: readonly ("OWNER" | "YARD_MANAGER" | "SALESPERSON")[] = [],
+): Promise<string> {
+  if (requestedDealerId) return requestedDealerId;
+
+  const [membership] = await transaction<{ dealer_id: string }[]>`
+    select w.dealer_id
+    from workers w
+    join dealers d on d.id = w.dealer_id
+    where w.auth_user_id = ${userId}
+      and w.is_active
+      and d.subscription_status = 'ACTIVE'
+      and d.subscription_expires_at > now()
+      and (
+        (${allowedRoles.includes("OWNER")} and w.workspace_role = 'OWNER')
+        or (${allowedRoles.includes("YARD_MANAGER")} and w.workspace_role = 'YARD_MANAGER')
+        or (${allowedRoles.includes("SALESPERSON")} and w.workspace_role = 'SALESPERSON')
+      )
+    order by w.created_at asc
+    limit 1
+  `;
+  if (!membership)
+    throw new Error("No active yard worker account is linked to this Supabase user.");
+  return membership.dealer_id;
+}
+
 export const createCarWithImportCosts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof createCarSchema>) =>
@@ -103,15 +152,21 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const actor = principal(context);
     return withRailwayTransaction(actor, async (transaction) => {
+      const dealerId = await resolveCurrentDealerId(
+        transaction,
+        actor.userId,
+        data.dealerId,
+        ["OWNER", "YARD_MANAGER"],
+      );
       const worker = await assertDealerWorker(
         transaction,
-        data.dealerId,
+        dealerId,
         actor.userId,
         ["OWNER", "YARD_MANAGER"],
       );
       const [dealer] = await transaction<{ active: boolean }[]>`
         select subscription_status = 'ACTIVE' and subscription_expires_at > now() as active
-        from dealers where id = ${data.dealerId}
+        from dealers where id = ${dealerId}
       `;
       if (!dealer?.active)
         throw new Error("Dealer subscription is expired or inactive.");
@@ -122,7 +177,7 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
           year, mileage_km, engine_cc, transmission, fuel, color, body_type, drive,
           booking_deposit_ksh, eta_date, images, description
         ) values (
-          ${data.dealerId}, ${data.brand}, ${data.model}, ${data.chassisNumber ?? null},
+          ${dealerId}, ${data.brand}, ${data.model}, ${data.chassisNumber ?? null},
           ${data.sellingPrice}, ${data.statusBadge}, ${data.year}, ${data.mileageKm},
           ${data.engineCc ?? null}, ${data.transmission}, ${data.fuel},
           ${data.color ?? null}, ${data.bodyType ?? null}, ${data.drive ?? null},
@@ -137,7 +192,7 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
         insert into import_costs (
           car_id, dealer_id, cif_purchase_price, kra_import_duty, port_clearance_fees, flatbed_transport
         ) values (
-          ${car.id}, ${data.dealerId}, ${data.cifPurchasePrice}, ${data.kraImportDuty},
+          ${car.id}, ${dealerId}, ${data.cifPurchasePrice}, ${data.kraImportDuty},
           ${data.portClearanceFees}, ${data.flatbedTransport}
         )
         returning total_true_cost
@@ -149,6 +204,15 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
           "Calculated import cost is outside the safe KSh range.",
         );
 
+      await transaction`
+        insert into vehicle_trade_pricing (
+          car_id, yard_id, wholesale_price, broker_commission_rate_percent
+        ) values (
+          ${car.id}, ${dealerId}, ${data.brokerWholesalePrice},
+          ${data.brokerCommissionRatePercent}
+        )
+      `;
+
       return {
         carId: car.id,
         totalTrueCostKsh,
@@ -156,6 +220,207 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
       };
     });
   });
+
+export const getBrokerDashboard = createServerFn({ method: "GET" })
+    .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+    .handler(async ({ context }) => {
+      const actor = principal(context);
+      return withRailwayTransaction(actor, async (transaction) => {
+        const dealerId = await resolveCurrentDealerId(
+          transaction,
+          actor.userId,
+          undefined,
+          ["SALESPERSON"],
+        );
+        const worker = await assertDealerWorker(transaction, dealerId, actor.userId, [
+          "SALESPERSON",
+        ]);
+
+        const cars = await transaction<{
+          id: string;
+          brand: string;
+          model: string;
+          year: number;
+          selling_price: string;
+          status_badge: "PURCHASED" | "ON_OCEAN" | "PORT_CLEARING" | "IN_YARD";
+          wholesale_price: string;
+          broker_commission_rate_percent: string;
+        }[]>`
+          select c.id, c.brand, c.model, c.year, c.selling_price::text,
+            c.status_badge, tp.wholesale_price::text,
+            tp.broker_commission_rate_percent::text
+          from cars c
+          join vehicle_trade_pricing tp on tp.car_id = c.id and tp.yard_id = c.dealer_id
+          where c.dealer_id = ${dealerId}
+            and c.is_published
+            and not exists (
+              select 1 from vehicle_sales vs where vs.car_id = c.id
+            )
+          order by c.created_at desc
+          limit 100
+        `;
+
+        const leads = await transaction<{
+          id: string;
+          car_id: string;
+          customer_name: string;
+          customer_phone: string;
+          status: "NEW" | "CONTACTED" | "CONVERTED" | "LOST";
+          created_at: string;
+          brand: string;
+          model: string;
+          year: number;
+        }[]>`
+          select l.id, l.car_id, l.customer_name, l.customer_phone, l.status,
+            l.created_at::text, c.brand, c.model, c.year
+          from broker_leads l
+          join cars c on c.id = l.car_id
+          where l.salesperson_worker_id = ${worker.id}
+          order by l.created_at desc
+          limit 100
+        `;
+
+        const commissions = await transaction<{
+          id: string;
+          final_sale_price: string;
+          commission_rate_percent: string;
+          commission_amount: string;
+          sold_at: string;
+          brand: string;
+          model: string;
+          year: number;
+        }[]>`
+          select vs.id, vs.final_sale_price::text, vs.commission_rate_percent::text,
+            vs.commission_amount::text, vs.sold_at::text, c.brand, c.model, c.year
+          from vehicle_sales vs
+          join cars c on c.id = vs.car_id
+          where vs.broker_worker_id = ${worker.id}
+          order by vs.sold_at desc
+          limit 100
+        `;
+
+        const [activeLeadCount] = await transaction<{ count: string }[]>`
+          select count(*)::text as count
+          from broker_leads
+          where salesperson_worker_id = ${worker.id}
+            and status in ('NEW', 'CONTACTED')
+        `;
+        if (!activeLeadCount)
+          throw new Error("Could not calculate active broker leads.");
+
+        const [earned] = await transaction<{ commission_earned: string }[]>`
+          select coalesce(sum(commission_amount), 0)::text as commission_earned
+          from vehicle_sales
+          where broker_worker_id = ${worker.id}
+        `;
+        if (!earned) throw new Error("Could not calculate broker commissions.");
+
+        return {
+          brokerWorkerId: worker.id,
+          dealerId,
+          cars,
+          leads,
+          commissions,
+          commissionEarnedKsh: earned.commission_earned,
+          activeLeadCount: Number(activeLeadCount.count),
+        };
+      });
+    });
+
+export const submitBrokerLead = createServerFn({ method: "POST" })
+    .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+    .inputValidator((input: z.input<typeof submitBrokerLeadSchema>) =>
+      submitBrokerLeadSchema.parse(input),
+    )
+    .handler(async ({ data, context }) => {
+      const actor = principal(context);
+      return withRailwayTransaction(actor, async (transaction) => {
+        const dealerId = await resolveCurrentDealerId(
+          transaction,
+          actor.userId,
+          undefined,
+          ["SALESPERSON"],
+        );
+        const worker = await assertDealerWorker(transaction, dealerId, actor.userId, [
+          "SALESPERSON",
+        ]);
+        const [lead] = await transaction<{ id: string }[]>`
+          insert into broker_leads (
+            yard_id, car_id, salesperson_worker_id, customer_name, customer_phone
+          )
+          select c.dealer_id, c.id, ${worker.id}, ${data.customerName},
+            ${data.customerPhone}
+          from cars c
+          join vehicle_trade_pricing tp
+            on tp.car_id = c.id and tp.yard_id = c.dealer_id
+          where c.id = ${data.carId}
+            and c.dealer_id = ${dealerId}
+            and c.is_published
+            and not exists (
+              select 1 from vehicle_sales vs where vs.car_id = c.id
+            )
+          returning id
+        `;
+        if (!lead)
+          throw new Error("Vehicle not found, not broker-enabled, or no longer available.");
+        return { leadId: lead.id };
+      });
+    });
+
+export const recordCompletedVehicleSale = createServerFn({ method: "POST" })
+    .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+    .inputValidator((input: z.input<typeof recordVehicleSaleSchema>) =>
+      recordVehicleSaleSchema.parse(input),
+    )
+    .handler(async ({ data, context }) => {
+      const actor = principal(context);
+      return withRailwayTransaction(actor, async (transaction) => {
+        const dealerId = await resolveCurrentDealerId(
+          transaction,
+          actor.userId,
+          undefined,
+          ["OWNER", "YARD_MANAGER"],
+        );
+        const worker = await assertDealerWorker(transaction, dealerId, actor.userId, [
+          "OWNER",
+          "YARD_MANAGER",
+        ]);
+        const [sale] = await transaction<{
+          id: string;
+          commission_amount: string;
+          commission_rate_percent: string;
+        }[]>`
+          insert into vehicle_sales (
+            yard_id, car_id, broker_worker_id, recorded_by_worker_id, final_sale_price
+          )
+          select c.dealer_id, c.id, ${data.brokerWorkerId}, ${worker.id},
+            ${data.finalSalePrice}
+          from cars c
+          where c.id = ${data.carId}
+            and c.dealer_id = ${dealerId}
+            and not exists (
+              select 1 from vehicle_sales existing where existing.car_id = c.id
+            )
+          returning id, commission_amount::text, commission_rate_percent::text
+        `;
+        if (!sale)
+          throw new Error("Vehicle not found or a completed sale is already recorded.");
+
+        const [car] = await transaction<{ id: string }[]>`
+          update cars
+          set is_published = false, updated_at = now()
+          where id = ${data.carId} and dealer_id = ${dealerId}
+          returning id
+        `;
+        if (!car) throw new Error("Could not mark the sold vehicle unavailable.");
+
+        return {
+          saleId: sale.id,
+          commissionAmountKsh: Number(sale.commission_amount),
+          commissionRatePercent: Number(sale.commission_rate_percent),
+        };
+      });
+    });
 
 const deactivateWorkerSchema = z.object({ dealerId: uuid, workerId: uuid });
 
@@ -287,7 +552,7 @@ export const recordSubscriptionPayment = createServerFn({ method: "POST" })
     );
   });
 
-const dealerDashboardSchema = z.object({ dealerId: uuid });
+const dealerDashboardSchema = z.object({ dealerId: uuid.optional() });
 
 export const getDealerDashboard = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
@@ -297,7 +562,13 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
   .handler(async ({ data, context }) => {
   const actor = principal(context);
   return withRailwayTransaction(actor, async (transaction) => {
-    await assertDealerWorker(transaction, data.dealerId, actor.userId, [
+    const dealerId = await resolveCurrentDealerId(
+      transaction,
+      actor.userId,
+      data.dealerId,
+      ["OWNER", "YARD_MANAGER"],
+    );
+    const worker = await assertDealerWorker(transaction, dealerId, actor.userId, [
       "OWNER",
       "YARD_MANAGER",
     ]);
@@ -313,7 +584,10 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
     }[]>`
       select id, brand, model, year, selling_price::text, status_badge, chassis_number
       from cars
-      where dealer_id = ${data.dealerId}
+      where dealer_id = ${dealerId}
+        and not exists (
+          select 1 from vehicle_sales vs where vs.car_id = cars.id
+        )
       order by created_at desc
       limit 100
     `;
@@ -327,7 +601,7 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
     }[]>`
       select id, full_name, email, workspace_role, is_active
       from workers
-      where dealer_id = ${data.dealerId}
+      where dealer_id = ${dealerId}
       order by created_at asc
     `;
 
@@ -340,13 +614,60 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
     }[]>`
       select id, worker_email, action_performed, record_id, "timestamp"::text
       from system_logs
-      where dealer_id = ${data.dealerId}
+      where dealer_id = ${dealerId}
       order by "timestamp" desc
       limit 50
     `;
 
-    return { cars, staff, logs };
+    const sales = await transaction<{
+      id: string;
+      final_sale_price: string;
+      commission_rate_percent: string;
+      commission_amount: string;
+      sold_at: string;
+      brand: string;
+      model: string;
+      year: number;
+      broker_name: string | null;
+      broker_email: string | null;
+    }[]>`
+      select vs.id, vs.final_sale_price::text, vs.commission_rate_percent::text,
+        vs.commission_amount::text, vs.sold_at::text, c.brand, c.model, c.year,
+        w.full_name as broker_name, w.email as broker_email
+      from vehicle_sales vs
+      join cars c on c.id = vs.car_id
+      left join workers w on w.id = vs.broker_worker_id
+      where vs.yard_id = ${dealerId}
+      order by vs.sold_at desc
+      limit 100
+    `;
+
+    return { dealerId, currentRole: worker.workspace_role, cars, staff, logs, sales };
   });
+  });
+
+export const linkAuthenticatedWorker = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .handler(async ({ context }) => {
+    const { data, error } = await context.supabase.auth.getUser(context.accessToken);
+    if (error) {
+      throw new Error(`Could not verify the authenticated Supabase user: ${error.message}`);
+    }
+    if (!data.user?.email || !data.user.email_confirmed_at) {
+      throw new Error("Verify your Supabase email before linking a yard worker account.");
+    }
+
+    const actor = {
+      userId: uuid.parse(context.userId),
+      workerEmail: data.user.email,
+    };
+    return withRailwayTransaction(actor, async (transaction) => {
+      const [result] = await transaction<{ linked_count: number }[]>`
+        select link_authenticated_worker_identity() as linked_count
+      `;
+      if (!result) throw new Error("Worker identity linking returned no result.");
+      return { linkedWorkers: Number(result.linked_count) };
+    });
   });
 
 export const getDeveloperDashboard = createServerFn({ method: "GET" })

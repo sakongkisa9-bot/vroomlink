@@ -11,7 +11,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { MetricCard, PortalShell } from "@/components/PortalShell";
-import { isBrowserSupabaseConfigured } from "@/integrations/client";
 import { getSystemStatus } from "@/lib/catalog.functions";
 import {
   getDeveloperDashboard,
@@ -35,7 +34,6 @@ function DeveloperAdmin() {
   const [busy, setBusy] = useState(false);
   const [dashboard, setDashboard] = useState<Awaited<ReturnType<typeof getDeveloperDashboard>> | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
-  const canAuthenticate = isBrowserSupabaseConfigured();
 
   async function toggleSystem() {
     setBusy(true);
@@ -104,15 +102,9 @@ function DeveloperAdmin() {
           <button
             type="button"
             onClick={() => setConfirmOpen(true)}
-            disabled={!canAuthenticate}
-            title={!canAuthenticate ? "Configure Supabase browser keys to enable admin actions." : undefined}
             className="min-h-12 shrink-0 rounded-xl bg-red-700 px-5 py-3 text-sm font-bold text-white shadow transition hover:bg-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 focus-visible:ring-offset-2"
           >
-            {!canAuthenticate
-              ? "ADMIN ACTIONS UNAVAILABLE"
-              : active
-                ? "SHUT DOWN ALL SYSTEM ROUTINES"
-                : "RESTORE SYSTEM ROUTINES"}
+            {active ? "SHUT DOWN ALL SYSTEM ROUTINES" : "RESTORE SYSTEM ROUTINES"}
           </button>
         </div>
       </section>
@@ -127,16 +119,10 @@ function DeveloperAdmin() {
         <button
           type="button"
           onClick={() => void refreshDashboard()}
-          disabled={loadingDashboard || !canAuthenticate}
+          disabled={loadingDashboard}
           className="h-10 rounded-lg border bg-card px-4 text-sm font-semibold transition hover:bg-accent disabled:opacity-50"
         >
-          {!canAuthenticate
-            ? "Supabase sign-in required"
-            : loadingDashboard
-              ? "Loading…"
-              : dashboard
-                ? "Refresh live data"
-                : "Load live data"}
+          {loadingDashboard ? "Loading…" : dashboard ? "Refresh live data" : "Load live data"}
         </button>
       </div>
 

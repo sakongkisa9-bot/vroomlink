@@ -32,8 +32,13 @@ npm run dev
 
 The public vehicle catalog and booking-deposit flow use Railway PostgreSQL. Supabase
 Auth remains the identity provider for protected server functions. Configure
-`DATABASE_URL` only in the server environment; keep the existing Supabase URL and
-publishable-key variables configured for authentication.
+`DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY` only in the server
+environment. Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`
+as Railway build variables because Vite embeds them into the browser bundle.
+Never expose `DATABASE_URL` or a Supabase service-role key through a `VITE_`
+variable.
+Enable the desired email and Google providers in Supabase Auth and add the
+deployed app origin to the Auth redirect URL allowlist.
 
 For Railway, build with `npm run build` and start with `npm start`. The start
 script uses Railway's injected `PORT`; it defaults to port `8080` for local or
@@ -49,6 +54,8 @@ PowerShell, apply it with:
 
 ```powershell
 psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f railway\migrations\0001_vroomlink.sql
+psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f railway\migrations\0002_link_authenticated_workers.sql
+psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f railway\migrations\0003_broker_sales.sql
 ```
 
 The migration creates a restricted `vroomlink_app` role and grants it to the
@@ -58,10 +65,25 @@ the server's `DATABASE_URL`. Do not expose `DATABASE_URL` through a `VITE_`
 variable or client-side code.
 
 The seeded vehicle rows preserve the current demo catalog only. Existing live
-Supabase inventory, memberships, and subscription data are not copied by this
-schema migration and must be exported and imported before switching production
-traffic to Railway. Worker records must also be linked to Supabase user IDs in
-`workers.auth_user_id` before protected dealer operations can be used.
+Supabase inventory, memberships, and subscription data are not copied by these
+migrations and must be exported and imported before switching production
+traffic to Railway. After the worker-link migration is applied, a verified
+Supabase session automatically links any active, unlinked worker rows with the
+same email address. The operation cannot change an existing user mapping;
+admins must provision the worker row with the matching email before the worker
+signs in.
+
+The broker and sales workflow is added by `0003_broker_sales.sql`. Apply it
+after the first two migrations. It creates private per-vehicle wholesale and
+commission terms, salesperson-owned leads, and completed vehicle sales. New
+vehicle imports require a wholesale price and commission rate; existing
+vehicles are not assigned invented trade terms and must have terms provisioned
+before they appear in broker inventory. A broker commission is recorded only
+when an authorized yard owner or manager records a completed sale, and the
+database calculates it from the final sale price and the vehicle's configured
+rate. Public catalog queries do not read trade-pricing records. Railway's
+dealer UUID is also exposed as the tenant `yard_id`, and role checks in the
+migration use security-definer `yard_role_of()` and `has_role()` helpers.
 
 Dealer subscriptions are marked expired on app transactions after their expiry
 time. For expiry processing independent of traffic, configure a Railway scheduled
