@@ -35,6 +35,13 @@ Auth remains the identity provider for protected server functions. Configure
 `DATABASE_URL` only in the server environment; keep the existing Supabase URL and
 publishable-key variables configured for authentication.
 
+For Railway, build with `npm run build` and start with `npm start`. The start
+script uses Railway's injected `PORT`; it defaults to port `8080` for local or
+container environments that do not provide one. Public catalog requests do not
+initialize Supabase Auth when Supabase client credentials are absent. Protected
+dealer and super-admin operations still require a valid Supabase session and
+server credentials.
+
 The initial Railway schema and demo catalog are in
 [`railway/migrations/0001_vroomlink.sql`](./railway/migrations/0001_vroomlink.sql).
 Review the migration and back up the target database before applying it. From
