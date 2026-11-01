@@ -15,6 +15,7 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { getSystemStatus } from "../lib/catalog.functions";
 import { MaintenanceScreen } from "../components/MaintenanceScreen";
+import { PortalAccessGate } from "../components/PortalAccessGate";
 import { Toaster } from "../components/ui/sonner";
 
 function NotFoundComponent() {
@@ -101,11 +102,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
     ],
   }),
-  // Global kill-switch gate: every page checks the system flag before rendering.
-  beforeLoad: async () => {
-    const { active } = await getSystemStatus();
-    return { systemActive: active };
-  },
+    // Global kill-switch gate: every page checks the system flag before rendering.
+    beforeLoad: async () => {
+      const { active } = await getSystemStatus();
+      return { systemActive: active };
+    },
   shellComponent: RootShell,
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
@@ -129,12 +130,30 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient, systemActive } = Route.useRouteContext();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  if (!systemActive && pathname !== "/developer") return <MaintenanceScreen />;
+  const isPublicMarketPath = pathname === "/" || pathname.startsWith("/cars/");
+
+  if (!systemActive && pathname !== "/developer") {
+    return isPublicMarketPath ? (
+      <MaintenanceScreen />
+    ) : (
+      <QueryClientProvider client={queryClient}>
+        <PortalAccessGate>
+          <MaintenanceScreen />
+        </PortalAccessGate>
+        <Toaster richColors />
+      </QueryClientProvider>
+    );
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      {isPublicMarketPath ? (
+        <Outlet />
+      ) : (
+        <PortalAccessGate>
+          <Outlet />
+        </PortalAccessGate>
+      )}
       <Toaster richColors />
     </QueryClientProvider>
   );

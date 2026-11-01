@@ -125,6 +125,7 @@ async function assertDealerWorker(
     where w.dealer_id = ${dealerId}
       and w.auth_user_id = ${userId}
       and w.is_active
+      and d.is_active
       and d.subscription_status = 'ACTIVE'
       and d.subscription_expires_at > now()
       and (
@@ -158,6 +159,7 @@ async function resolveCurrentDealerId(
     join dealers d on d.id = w.dealer_id
     where w.auth_user_id = ${userId}
       and w.is_active
+      and d.is_active
       and d.subscription_status = 'ACTIVE'
       and d.subscription_expires_at > now()
       and (
@@ -196,7 +198,8 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
         ["OWNER", "YARD_MANAGER"],
       );
       const [dealer] = await transaction<{ active: boolean }[]>`
-        select subscription_status = 'ACTIVE' and subscription_expires_at > now() as active
+        select is_active and subscription_status = 'ACTIVE'
+          and subscription_expires_at > now() as active
         from dealers where id = ${dealerId}
       `;
       if (!dealer?.active)
@@ -758,15 +761,55 @@ export const getDeveloperDashboard = createServerFn({ method: "GET" })
             id: string;
             showroom_name: string;
             location: string;
+            slug: string;
+            whatsapp_phone: string;
+            is_active: boolean;
             subscription_status: "ACTIVE" | "EXPIRED";
             subscription_expires_at: string;
           }[]
         >`
-        select id, showroom_name, location, subscription_status, subscription_expires_at::text
-        from dealers
-        order by subscription_expires_at desc
-        limit 100
+          select id, showroom_name, location, slug, whatsapp_phone, is_active,
+            subscription_status, subscription_expires_at::text
+          from dealers
+          order by subscription_expires_at desc
+          limit 100
       `;
+
+        const workers = await transaction<
+          {
+            dealer_id: string;
+            full_name: string;
+            email: string;
+            workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+            is_active: boolean;
+            login_linked: boolean;
+          }[]
+        >`
+          select dealer_id, full_name, email, workspace_role, is_active,
+            auth_user_id is not null as login_linked
+          from workers
+          where dealer_id in (
+            select id from dealers
+            order by subscription_expires_at desc
+            limit 100
+          )
+          order by dealer_id, created_at
+      `;
+
+        type DeveloperWorkerSummary = {
+          dealer_id: string;
+          full_name: string;
+          email: string;
+          workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+          is_active: boolean;
+          login_linked: boolean;
+        };
+        const staffByDealer = new Map<string, DeveloperWorkerSummary[]>();
+        for (const worker of workers) {
+          const staff = staffByDealer.get(worker.dealer_id) ?? [];
+          staff.push(worker);
+          staffByDealer.set(worker.dealer_id, staff);
+        }
 
         const payments = await transaction<
           {
@@ -782,7 +825,50 @@ export const getDeveloperDashboard = createServerFn({ method: "GET" })
         limit 200
       `;
 
-        return { dealers, payments };
+        return {
+          dealers: dealers.map((dealer) => ({
+            ...dealer,
+            workers: staffByDealer.get(dealer.id) ?? [],
+          })),
+          payments,
+        };
+      },
+    );
+  });
+
+const setDealerAvailabilitySchema = z.object({
+  dealerIds: z.array(uuid).min(1).max(100),
+  active: z.boolean(),
+});
+
+export const setDealerAvailability = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: z.input<typeof setDealerAvailabilitySchema>) =>
+    setDealerAvailabilitySchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    await assertSuperAdmin(context);
+    const actor = principal(context);
+    return withRailwayTransaction(
+      { ...actor, superAdmin: true, allowMaintenance: true },
+      async (transaction) => {
+        const updatedIds: string[] = [];
+        for (const dealerId of new Set(data.dealerIds)) {
+          const [dealer] = await transaction<{ id: string }[]>`
+            update dealers
+            set is_active = ${data.active}, updated_at = now()
+            where id = ${dealerId}
+            returning id
+          `;
+          if (!dealer) {
+            throw new Error(
+              "A selected yard could not be updated. Refresh the dashboard and try again.",
+            );
+          }
+          updatedIds.push(dealer.id);
+        }
+
+        return { dealerIds: updatedIds, active: data.active };
       },
     );
   });

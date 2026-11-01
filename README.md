@@ -61,6 +61,7 @@ npm run db:migrate -- 0001_vroomlink.sql
 npm run db:migrate -- 0002_link_authenticated_workers.sql
 npm run db:migrate -- 0003_broker_sales.sql
 npm run db:migrate -- 0004_super_admin_dealer_provisioning.sql
+npm run db:migrate -- 0005_dealer_availability.sql
 ```
 
 The migration runner executes the checked-in SQL file using the project's
@@ -97,6 +98,12 @@ Migration `0004_super_admin_dealer_provisioning.sql` grants the application
 role permission to create dealer and owner records only after the backend has
 verified a Supabase `super_admin` role. The developer panel uses this flow and
 does not rely on a hardcoded client-side password.
+Migration `0005_dealer_availability.sql` adds developer-controlled per-yard
+shutdowns. A shut-down yard is blocked from worker access and its listings and
+booking deposits are unavailable until a super-admin restores it. The Developer
+Panel displays the yard's registered staff names, roles, sign-in emails, and
+whether each email has been linked to Supabase Auth; passwords are never
+available to the application.
 
 Dealer subscriptions are marked expired on app transactions after their expiry
 time. For expiry processing independent of traffic, configure a Railway scheduled

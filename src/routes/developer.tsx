@@ -16,6 +16,7 @@ import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import {
   createDealerAccount,
   getDeveloperDashboard,
+  setDealerAvailability,
   setRailwaySystemActive,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
@@ -32,6 +33,7 @@ function DeveloperAdmin() {
   const setSystemActive = useServerFn(setRailwaySystemActive);
   const loadDashboard = useServerFn(getDeveloperDashboard);
   const saveDealer = useServerFn(createDealerAccount);
+  const updateDealerAvailability = useServerFn(setDealerAvailability);
   const [active, setActive] = useState(initialActive);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,6 +46,12 @@ function DeveloperAdmin() {
   >("checking");
   const [accessError, setAccessError] = useState("");
   const [creatingDealer, setCreatingDealer] = useState(false);
+  const [selectedYardIds, setSelectedYardIds] = useState<string[]>([]);
+  const [yardAction, setYardAction] = useState<{
+    dealerIds: string[];
+    active: boolean;
+  } | null>(null);
+  const [updatingYards, setUpdatingYards] = useState(false);
 
   const refreshDashboard = useCallback(
     async (quiet = false) => {
@@ -142,6 +150,37 @@ function DeveloperAdmin() {
     }
   }
 
+  async function applyYardAvailability() {
+    if (!yardAction) return;
+    setUpdatingYards(true);
+    try {
+      const headers = await getSupabaseAuthHeaders();
+      const result = await updateDealerAvailability({
+        data: yardAction,
+        headers,
+      });
+      setSelectedYardIds((selected) =>
+        selected.filter((id) => !result.dealerIds.includes(id)),
+      );
+      setYardAction(null);
+      toast.success(
+        result.active
+          ? "Selected car yards are active."
+          : "Selected car yards have been shut down.",
+      );
+      await refreshDashboard(true);
+    } catch (error) {
+      console.error("Could not change car yard availability", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not update the selected car yards.",
+      );
+    } finally {
+      setUpdatingYards(false);
+    }
+  }
+
   const monthlyCashflow =
     dashboard?.payments.reduce(
       (sum, payment) => sum + Number(payment.amount_ksh),
@@ -150,6 +189,7 @@ function DeveloperAdmin() {
   const activeSubscriptions =
     dashboard?.dealers.filter(
       (dealer) =>
+        dealer.is_active &&
         dealer.subscription_status === "ACTIVE" &&
         new Date(dealer.subscription_expires_at).getTime() > Date.now(),
     ).length ?? 0;
@@ -241,7 +281,7 @@ function DeveloperAdmin() {
 
           <section className="grid gap-4 sm:grid-cols-2">
             <MetricCard
-              label="Active Car Yard subscriptions"
+              label="Active car yards"
               value={dashboard ? String(activeSubscriptions) : "—"}
               detail={
                 dashboard
@@ -356,7 +396,8 @@ function DeveloperAdmin() {
                   Car Yard subscriptions
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Current expiry status and registered locations.
+                  Yard details, staff sign-in emails, and individual access
+                  controls.
                 </p>
               </div>
               {dashboard && (
@@ -366,45 +407,183 @@ function DeveloperAdmin() {
               )}
             </div>
             {dashboard ? (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[620px] text-left text-sm">
-                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                    <tr>
-                      <th className="px-4 py-3 font-semibold">Showroom</th>
-                      <th className="px-4 py-3 font-semibold">Location</th>
-                      <th className="px-4 py-3 font-semibold">Subscription</th>
-                      <th className="px-4 py-3 font-semibold">Expires</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {dashboard.dealers.map((dealer) => {
-                      const currentlyActive =
-                        dealer.subscription_status === "ACTIVE" &&
-                        new Date(dealer.subscription_expires_at).getTime() >
-                          Date.now();
-                      return (
-                        <tr key={dealer.id}>
-                          <td className="px-4 py-4 font-medium">
+              <div className="space-y-4 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="mr-auto text-sm text-muted-foreground">
+                    {selectedYardIds.length} yards selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedYardIds(
+                        selectedYardIds.length > 0 &&
+                          selectedYardIds.length === dashboard.dealers.length
+                          ? []
+                          : dashboard.dealers.map((dealer) => dealer.id),
+                      )
+                    }
+                    className="h-9 rounded-lg border px-3 text-sm font-medium hover:bg-accent"
+                  >
+                    {selectedYardIds.length > 0 &&
+                    selectedYardIds.length === dashboard.dealers.length
+                      ? "Clear selection"
+                      : "Select all"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedYardIds.length === 0 || updatingYards}
+                    onClick={() =>
+                      setYardAction({
+                        dealerIds: selectedYardIds,
+                        active: false,
+                      })
+                    }
+                    className="h-9 rounded-lg bg-red-700 px-3 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    Shut down selected
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedYardIds.length === 0 || updatingYards}
+                    onClick={() =>
+                      setYardAction({
+                        dealerIds: selectedYardIds,
+                        active: true,
+                      })
+                    }
+                    className="h-9 rounded-lg border px-3 text-sm font-semibold disabled:opacity-50"
+                  >
+                    Restore selected
+                  </button>
+                </div>
+                {dashboard.dealers.map((dealer) => {
+                  const subscriptionActive =
+                    dealer.subscription_status === "ACTIVE" &&
+                    new Date(dealer.subscription_expires_at).getTime() >
+                      Date.now();
+                  return (
+                    <article key={dealer.id} className="rounded-xl border p-4">
+                      <div className="flex flex-wrap items-start gap-3">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${dealer.showroom_name}`}
+                          checked={selectedYardIds.includes(dealer.id)}
+                          onChange={(event) =>
+                            setSelectedYardIds((selected) =>
+                              event.target.checked
+                                ? [...selected, dealer.id]
+                                : selected.filter((id) => id !== dealer.id),
+                            )
+                          }
+                          className="mt-1 h-4 w-4 accent-primary"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-semibold">
                             {dealer.showroom_name}
-                          </td>
-                          <td className="px-4 py-4">{dealer.location}</td>
-                          <td className="px-4 py-4">
-                            <span
-                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${currentlyActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}
-                            >
-                              {currentlyActive ? "Active" : "Expired"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-4">
+                          </h3>
+                          <p className="text-sm text-muted-foreground">
+                            {dealer.location} · /{dealer.slug}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${subscriptionActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}
+                          >
+                            {subscriptionActive
+                              ? "Subscription active"
+                              : "Subscription expired"}
+                          </span>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${dealer.is_active ? "bg-blue-100 text-blue-800" : "bg-gray-200 text-gray-800"}`}
+                          >
+                            {dealer.is_active
+                              ? "Yard online"
+                              : "Yard shut down"}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={updatingYards}
+                            onClick={() =>
+                              setYardAction({
+                                dealerIds: [dealer.id],
+                                active: !dealer.is_active,
+                              })
+                            }
+                            className={`h-9 rounded-lg px-3 text-sm font-semibold text-white disabled:opacity-50 ${dealer.is_active ? "bg-red-700 hover:bg-red-800" : "bg-primary hover:bg-primary/90"}`}
+                          >
+                            {dealer.is_active
+                              ? "Shut down yard"
+                              : "Restore yard"}
+                          </button>
+                        </div>
+                      </div>
+                      <dl className="mt-4 grid gap-3 border-t pt-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                        <div>
+                          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Subscription expires
+                          </dt>
+                          <dd className="mt-1">
                             {new Date(
                               dealer.subscription_expires_at,
-                            ).toLocaleDateString("en-KE")}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            ).toLocaleString("en-KE")}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Yard contact
+                          </dt>
+                          <dd className="mt-1">{dealer.whatsapp_phone}</dd>
+                        </div>
+                        <div className="sm:col-span-2 lg:col-span-1">
+                          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Staff sign-in accounts
+                          </dt>
+                          <dd className="mt-1">
+                            {dealer.workers.length === 0 ? (
+                              <span className="text-muted-foreground">
+                                No staff accounts
+                              </span>
+                            ) : (
+                              <ul className="space-y-2">
+                                {dealer.workers.map((worker) => (
+                                  <li
+                                    key={`${dealer.id}-${worker.email}`}
+                                    className="rounded-lg bg-muted/50 p-2"
+                                  >
+                                    <span className="block font-medium">
+                                      {worker.full_name} ·{" "}
+                                      {worker.workspace_role.replaceAll(
+                                        "_",
+                                        " ",
+                                      )}
+                                    </span>
+                                    <span className="block break-all text-muted-foreground">
+                                      {worker.email}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {worker.login_linked
+                                        ? "Supabase login linked"
+                                        : "Login not linked yet"}
+                                      {" · "}
+                                      {worker.is_active
+                                        ? "Account enabled"
+                                        : "Account deactivated"}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </dd>
+                        </div>
+                      </dl>
+                    </article>
+                  );
+                })}
+                {dashboard.dealers.length === 0 && (
+                  <p className="py-5 text-center text-sm text-muted-foreground">
+                    No car yards have been registered.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="p-8 text-center text-sm text-muted-foreground">
@@ -476,6 +655,49 @@ function DeveloperAdmin() {
                     : active
                       ? "Confirm shutdown"
                       : "Restore platform"}
+                </button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog
+            open={yardAction !== null}
+            onOpenChange={(open: boolean) => {
+              if (!open && !updatingYards) setYardAction(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>
+                  {yardAction?.active
+                    ? "Restore selected car yards?"
+                    : "Shut down selected car yards?"}
+                </DialogTitle>
+                <DialogDescription>
+                  {yardAction?.active
+                    ? "Restoring enables staff access and public vehicle listings again, subject to the subscription being active."
+                    : "Shutting down blocks yard staff access and removes its vehicles from the public marketplace. Existing staff accounts and records are retained."}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <button
+                  type="button"
+                  disabled={updatingYards}
+                  onClick={() => setYardAction(null)}
+                  className="h-10 rounded-lg border px-4 text-sm font-semibold disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={updatingYards || !yardAction}
+                  onClick={() => void applyYardAvailability()}
+                  className={`h-10 rounded-lg px-4 text-sm font-semibold text-white disabled:opacity-50 ${yardAction?.active ? "bg-primary" : "bg-red-700"}`}
+                >
+                  {updatingYards
+                    ? "Updating…"
+                    : yardAction?.active
+                      ? "Restore yards"
+                      : "Confirm shutdown"}
                 </button>
               </DialogFooter>
             </DialogContent>

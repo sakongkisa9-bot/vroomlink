@@ -166,10 +166,23 @@ export function PortalAuthControl() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex h-10 max-w-48 shrink-0 items-center rounded-full border bg-card px-4 text-sm font-semibold shadow-sm outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={
+          session
+            ? `Account menu for ${session.user.email ?? "signed-in user"}`
+            : "Sign in"
+        }
+        className={`inline-flex h-10 shrink-0 items-center justify-center rounded-full border bg-card text-sm font-semibold shadow-sm outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
+          session ? "w-10" : "px-4"
+        }`}
         title={session?.user.email ?? "Sign in"}
       >
-        <span className="truncate">{session?.user.email ?? "Sign in"}</span>
+        {session ? (
+          <span aria-hidden="true">
+            {session.user.email?.trim().charAt(0).toUpperCase() || "U"}
+          </span>
+        ) : (
+          <span>Sign in</span>
+        )}
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>

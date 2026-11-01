@@ -167,6 +167,7 @@ const publicVehicleSelect = `
   from cars c
   join dealers d on d.id = c.dealer_id
   where c.is_published
+    and d.is_active
     and d.subscription_status = 'ACTIVE'
     and d.subscription_expires_at > now()
 `;
@@ -211,6 +212,7 @@ export async function createRailwayBookingDeposit(input: {
       join dealers d on d.id = c.dealer_id
       where c.id = ${input.vehicleId}
         and c.is_published
+        and d.is_active
         and d.subscription_status = 'ACTIVE'
         and d.subscription_expires_at > now()
       returning id, amount_ksh
