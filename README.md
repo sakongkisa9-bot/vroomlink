@@ -49,14 +49,19 @@ server credentials.
 
 The initial Railway schema and demo catalog are in
 [`railway/migrations/0001_vroomlink.sql`](./railway/migrations/0001_vroomlink.sql).
-Review the migration and back up the target database before applying it. From
-PowerShell, apply it with:
+Review the migration and back up the target database before applying it. With
+the project dependencies installed and `DATABASE_URL` set in `.env`, apply
+migrations from PowerShell with:
 
 ```powershell
-psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f railway\migrations\0001_vroomlink.sql
-psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f railway\migrations\0002_link_authenticated_workers.sql
-psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f railway\migrations\0003_broker_sales.sql
+npm run db:migrate -- 0001_vroomlink.sql
+npm run db:migrate -- 0002_link_authenticated_workers.sql
+npm run db:migrate -- 0003_broker_sales.sql
 ```
+
+The migration runner executes the checked-in SQL file using the project's
+PostgreSQL driver, so `psql` is not required. Do not paste `DATABASE_URL` into
+chat or commit `.env` to Git.
 
 The migration creates a restricted `vroomlink_app` role and grants it to the
 database user that applies the migration. The server switches each pooled

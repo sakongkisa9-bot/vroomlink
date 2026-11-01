@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "start": "node scripts/start-server.mjs",
+    "db:migrate": "node --env-file-if-exists=.env scripts/run-railway-migration.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
