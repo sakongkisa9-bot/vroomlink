@@ -57,6 +57,7 @@ migrations from PowerShell with:
 npm run db:migrate -- 0001_vroomlink.sql
 npm run db:migrate -- 0002_link_authenticated_workers.sql
 npm run db:migrate -- 0003_broker_sales.sql
+npm run db:migrate -- 0004_super_admin_dealer_provisioning.sql
 ```
 
 The migration runner executes the checked-in SQL file using the project's
@@ -89,6 +90,10 @@ database calculates it from the final sale price and the vehicle's configured
 rate. Public catalog queries do not read trade-pricing records. Railway's
 dealer UUID is also exposed as the tenant `yard_id`, and role checks in the
 migration use security-definer `yard_role_of()` and `has_role()` helpers.
+Migration `0004_super_admin_dealer_provisioning.sql` grants the application
+role permission to create dealer and owner records only after the backend has
+verified a Supabase `super_admin` role. The developer panel uses this flow and
+does not rely on a hardcoded client-side password.
 
 Dealer subscriptions are marked expired on app transactions after their expiry
 time. For expiry processing independent of traffic, configure a Railway scheduled

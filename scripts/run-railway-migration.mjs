@@ -6,23 +6,30 @@ import postgres from "postgres";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationName = process.argv[2];
 
-if (!/^000[1-3]_[a-z0-9_]+\.sql$/.test(migrationName ?? "")) {
+if (!/^000[1-4]_[a-z0-9_]+\.sql$/.test(migrationName ?? "")) {
   console.error(
     "Usage: npm run db:migrate -- <migration-file> (for example, 0002_link_authenticated_workers.sql)",
   );
   process.exitCode = 1;
 } else {
   const migrationPath = resolve(root, "railway", "migrations", migrationName);
-  const migrationsDirectory = await realpath(resolve(root, "railway", "migrations"));
+  const migrationsDirectory = await realpath(
+    resolve(root, "railway", "migrations"),
+  );
   const resolvedMigration = await realpath(migrationPath).catch(() => null);
 
-  if (!resolvedMigration || dirname(resolvedMigration) !== migrationsDirectory) {
+  if (
+    !resolvedMigration ||
+    dirname(resolvedMigration) !== migrationsDirectory
+  ) {
     console.error(`Migration file not found: ${migrationName}`);
     process.exitCode = 1;
   } else {
     const databaseUrl = process.env["DATABASE_URL"];
     if (!databaseUrl) {
-      console.error("DATABASE_URL is not set. Add it to .env or the environment.");
+      console.error(
+        "DATABASE_URL is not set. Add it to .env or the environment.",
+      );
       process.exitCode = 1;
     } else {
       const sql = postgres(databaseUrl, {
