@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { isBrowserSupabaseConfigured, supabase } from "@/integrations/client";
+import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import { linkAuthenticatedWorker } from "@/lib/railway-admin.functions";
 
 export function PortalAuthControl() {
@@ -51,15 +52,21 @@ export function PortalAuthControl() {
     if (!session?.user) return;
 
     let active = true;
-    void linkWorker()
+    void getSupabaseAuthHeaders()
+      .then((headers) => linkWorker({ headers }))
       .then(({ linkedWorkers }) => {
         if (active && linkedWorkers > 0) {
-          toast.success("Your verified sign-in is linked to the yard worker account.");
+          toast.success(
+            "Your verified sign-in is linked to the yard worker account.",
+          );
         }
       })
       .catch((error: unknown) => {
         if (!active) return;
-        console.error("Could not link the authenticated worker identity", error);
+        console.error(
+          "Could not link the authenticated worker identity",
+          error,
+        );
         toast.error(
           error instanceof Error
             ? error.message
@@ -76,14 +83,19 @@ export function PortalAuthControl() {
     event.preventDefault();
     setBusy(true);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
       if (error) throw error;
       setPassword("");
       setOpen(false);
       toast.success("Signed in successfully.");
     } catch (error) {
       console.error("Supabase email sign-in failed", error);
-      toast.error(error instanceof Error ? error.message : "Email sign-in failed.");
+      toast.error(
+        error instanceof Error ? error.message : "Email sign-in failed.",
+      );
     } finally {
       setBusy(false);
     }
@@ -105,7 +117,11 @@ export function PortalAuthControl() {
       toast.success("Check your email for a secure sign-in link.");
     } catch (error) {
       console.error("Supabase email-link sign-in failed", error);
-      toast.error(error instanceof Error ? error.message : "Could not send a sign-in link.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not send a sign-in link.",
+      );
     } finally {
       setBusy(false);
     }
@@ -121,7 +137,9 @@ export function PortalAuthControl() {
       if (error) throw error;
     } catch (error) {
       console.error("Supabase Google sign-in failed", error);
-      toast.error(error instanceof Error ? error.message : "Google sign-in failed.");
+      toast.error(
+        error instanceof Error ? error.message : "Google sign-in failed.",
+      );
       setBusy(false);
     }
   }
@@ -151,14 +169,14 @@ export function PortalAuthControl() {
         className="inline-flex h-10 max-w-48 shrink-0 items-center rounded-full border bg-card px-4 text-sm font-semibold shadow-sm outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
         title={session?.user.email ?? "Sign in"}
       >
-        <span className="truncate">
-          {session?.user.email ?? "Sign in"}
-        </span>
+        <span className="truncate">{session?.user.email ?? "Sign in"}</span>
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{session ? "Your VroomLink account" : "Sign in to VroomLink"}</DialogTitle>
+            <DialogTitle>
+              {session ? "Your VroomLink account" : "Sign in to VroomLink"}
+            </DialogTitle>
             <DialogDescription>
               {session
                 ? "Protected portal actions use your verified Supabase identity and assigned role."
@@ -167,12 +185,15 @@ export function PortalAuthControl() {
           </DialogHeader>
           {!configured ? (
             <p className="rounded-lg border bg-muted p-3 text-sm text-muted-foreground">
-              Supabase browser configuration is missing. Set the VITE_SUPABASE_URL and
-              VITE_SUPABASE_PUBLISHABLE_KEY build variables, then rebuild the client.
+              Supabase browser configuration is missing. Set the
+              VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY build
+              variables, then rebuild the client.
             </p>
           ) : session ? (
             <div className="space-y-4">
-              <p className="rounded-lg border bg-muted p-3 text-sm">{session.user.email}</p>
+              <p className="rounded-lg border bg-muted p-3 text-sm">
+                {session.user.email}
+              </p>
               <button
                 type="button"
                 disabled={busy}

@@ -17,6 +17,7 @@ import {
   recordCompletedVehicleSale,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
+import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 
 const pipeline = [
   { status: "PURCHASED", label: "Purchased (Japan)" },
@@ -31,14 +32,16 @@ export const Route = createFileRoute("/dealer")({
 });
 
 function DealerConsole() {
-  const [currentRole, setCurrentRole] = useState<"OWNER" | "YARD_MANAGER" | null>(
-    null,
-  );
-  const [section, setSection] = useState<"overview" | "staff" | "sales">("overview");
-  const [costingOpen, setCostingOpen] = useState(false);
-  const [liveDashboard, setLiveDashboard] = useState<
-    Awaited<ReturnType<typeof getDealerDashboard>> | null
+  const [currentRole, setCurrentRole] = useState<
+    "OWNER" | "YARD_MANAGER" | null
   >(null);
+  const [section, setSection] = useState<"overview" | "staff" | "sales">(
+    "overview",
+  );
+  const [costingOpen, setCostingOpen] = useState(false);
+  const [liveDashboard, setLiveDashboard] = useState<Awaited<
+    ReturnType<typeof getDealerDashboard>
+  > | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const loadDashboard = useServerFn(getDealerDashboard);
   const deactivateWorker = useServerFn(deactivateDealerWorker);
@@ -46,7 +49,8 @@ function DealerConsole() {
   async function loadOwnerDashboard() {
     setLoadingDashboard(true);
     try {
-      const dashboard = await loadDashboard({ data: {} });
+      const headers = await getSupabaseAuthHeaders();
+      const dashboard = await loadDashboard({ data: {}, headers });
       setLiveDashboard(dashboard);
       setCurrentRole(dashboard.currentRole);
       toast.success("Live dealer records loaded.");
@@ -66,20 +70,26 @@ function DealerConsole() {
 
   async function deactivateLiveWorker(workerId: string) {
     if (!liveDashboard) {
-      toast.error("Load the authenticated yard staff list before deactivating a worker.");
+      toast.error(
+        "Load the authenticated yard staff list before deactivating a worker.",
+      );
       return;
     }
 
     try {
+      const headers = await getSupabaseAuthHeaders();
       await deactivateWorker({
         data: { dealerId: liveDashboard.dealerId, workerId },
+        headers,
       });
       setLiveDashboard((current) =>
         current
           ? {
               ...current,
               staff: current.staff.map((worker) =>
-                worker.id === workerId ? { ...worker, is_active: false } : worker,
+                worker.id === workerId
+                  ? { ...worker, is_active: false }
+                  : worker,
               ),
             }
           : current,
@@ -117,7 +127,11 @@ function DealerConsole() {
           disabled={loadingDashboard}
           className="h-10 rounded-lg border bg-background px-4 text-sm font-semibold disabled:opacity-50"
         >
-          {loadingDashboard ? "Loading…" : liveDashboard ? "Refresh workspace" : "Load workspace"}
+          {loadingDashboard
+            ? "Loading…"
+            : liveDashboard
+              ? "Refresh workspace"
+              : "Load workspace"}
         </button>
       </div>
 
@@ -146,68 +160,80 @@ function DealerConsole() {
             />
           ) : (
             <>
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold">Vehicle import pipeline</h2>
-              <p className="text-sm text-muted-foreground">Your yard fleet grouped by its current import status.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCostingOpen(true)}
-              className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
-            >
-              Vehicle Sourcing &amp; Costing
-            </button>
-          </div>
-          <div className="grid gap-4 xl:grid-cols-4">
-            {pipeline.map((column) => {
-              const columnVehicles = liveDashboard.cars.filter(
-                (vehicle) => vehicle.status_badge === column.status,
-              );
-              return (
-                <section key={column.status} className="min-w-0 rounded-2xl border bg-muted/50 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-2 px-1">
-                    <h3 className="text-sm font-semibold">{column.label}</h3>
-                    <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted-foreground">
-                      {columnVehicles.length}
-                    </span>
-                  </div>
-                  <div className="space-y-3">
-                    {columnVehicles.map((vehicle) => (
-                      <article key={vehicle.id} className="rounded-xl border bg-card p-3 shadow-sm">
-                        <div className="flex items-start justify-between gap-2">
-                          <h4 className="text-sm font-semibold">
-                            {vehicle.year} {vehicle.brand} {vehicle.model}
-                          </h4>
-                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                            {column.label}
-                          </span>
-                        </div>
-                        <p className="mt-2 text-sm font-bold text-primary">
-                          {formatKsh(Number(vehicle.selling_price))}
-                        </p>
-                        {vehicle.chassis_number && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Chassis: {vehicle.chassis_number}
-                          </p>
-                        )}
-                      </article>
-                    ))}
-                    {columnVehicles.length === 0 && (
-                      <div className="rounded-xl border border-dashed bg-card/60 px-3 py-6 text-center text-xs text-muted-foreground">
-                        No vehicles at this stage
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-semibold">
+                    Vehicle import pipeline
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Your yard fleet grouped by its current import status.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCostingOpen(true)}
+                  className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
+                >
+                  Vehicle Sourcing &amp; Costing
+                </button>
+              </div>
+              <div className="grid gap-4 xl:grid-cols-4">
+                {pipeline.map((column) => {
+                  const columnVehicles = liveDashboard.cars.filter(
+                    (vehicle) => vehicle.status_badge === column.status,
+                  );
+                  return (
+                    <section
+                      key={column.status}
+                      className="min-w-0 rounded-2xl border bg-muted/50 p-3"
+                    >
+                      <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                        <h3 className="text-sm font-semibold">
+                          {column.label}
+                        </h3>
+                        <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted-foreground">
+                          {columnVehicles.length}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-          <CostingDialog
-            open={costingOpen}
-            onOpenChange={setCostingOpen}
-            onSaved={() => void loadOwnerDashboard()}
-          />
+                      <div className="space-y-3">
+                        {columnVehicles.map((vehicle) => (
+                          <article
+                            key={vehicle.id}
+                            className="rounded-xl border bg-card p-3 shadow-sm"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <h4 className="text-sm font-semibold">
+                                {vehicle.year} {vehicle.brand} {vehicle.model}
+                              </h4>
+                              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                                {column.label}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm font-bold text-primary">
+                              {formatKsh(Number(vehicle.selling_price))}
+                            </p>
+                            {vehicle.chassis_number && (
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Chassis: {vehicle.chassis_number}
+                              </p>
+                            )}
+                          </article>
+                        ))}
+                        {columnVehicles.length === 0 && (
+                          <div className="rounded-xl border border-dashed bg-card/60 px-3 py-6 text-center text-xs text-muted-foreground">
+                            No vehicles at this stage
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+              <CostingDialog
+                open={costingOpen}
+                onOpenChange={setCostingOpen}
+                onSaved={() => void loadOwnerDashboard()}
+              />
             </>
           )}
         </section>
@@ -261,8 +287,9 @@ function DealerConsole() {
         <section className="rounded-2xl border border-dashed bg-card p-8 text-center">
           <h2 className="text-lg font-semibold">Yard access required</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sign in with an email matching an active yard worker record, then load your workspace.
-            Protected operations verify your role on the server.
+            Sign in with an email matching an active yard worker record, then
+            load your workspace. Protected operations verify your role on the
+            server.
           </p>
         </section>
       )}
@@ -290,12 +317,14 @@ function SalesManagement({
     const form = new FormData(formElement);
     setBusy(true);
     try {
+      const headers = await getSupabaseAuthHeaders();
       const result = await saveSale({
         data: {
           carId: String(form.get("carId")),
           brokerWorkerId: String(form.get("brokerWorkerId") ?? "") || null,
           finalSalePrice: Number(form.get("finalSalePrice")),
         },
+        headers,
       });
       toast.success(
         `Completed sale recorded. Broker commission: ${formatKsh(result.commissionAmountKsh)}.`,
@@ -305,7 +334,9 @@ function SalesManagement({
     } catch (error) {
       console.error("Could not record completed vehicle sale", error);
       toast.error(
-        error instanceof Error ? error.message : "Could not record completed vehicle sale.",
+        error instanceof Error
+          ? error.message
+          : "Could not record completed vehicle sale.",
       );
     } finally {
       setBusy(false);
@@ -314,10 +345,14 @@ function SalesManagement({
 
   return (
     <div className="space-y-6">
-      <form onSubmit={(event) => void submitSale(event)} className="max-w-3xl rounded-2xl border bg-card p-5 shadow-sm">
+      <form
+        onSubmit={(event) => void submitSale(event)}
+        className="max-w-3xl rounded-2xl border bg-card p-5 shadow-sm"
+      >
         <h2 className="text-xl font-semibold">Record a completed sale</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          The database snapshots the vehicle&apos;s configured commission rate and calculates commission from the final sale price.
+          The database snapshots the vehicle&apos;s configured commission rate
+          and calculates commission from the final sale price.
         </p>
         <div className="mt-5 grid gap-4 sm:grid-cols-3">
           <label className="space-y-1.5 text-sm font-medium">
@@ -395,9 +430,13 @@ function SalesManagement({
                   <td className="px-3 py-4 font-medium">
                     {sale.year} {sale.brand} {sale.model}
                   </td>
-                  <td className="px-3 py-4">{formatKsh(Number(sale.final_sale_price))}</td>
+                  <td className="px-3 py-4">
+                    {formatKsh(Number(sale.final_sale_price))}
+                  </td>
                   <td className="px-3 py-4">{sale.broker_name ?? "—"}</td>
-                  <td className="px-3 py-4">{Number(sale.commission_rate_percent)}%</td>
+                  <td className="px-3 py-4">
+                    {Number(sale.commission_rate_percent)}%
+                  </td>
                   <td className="px-3 py-4 font-semibold text-primary">
                     {formatKsh(Number(sale.commission_amount))}
                   </td>
@@ -408,7 +447,10 @@ function SalesManagement({
               ))}
               {dashboard.sales.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                  <td
+                    colSpan={6}
+                    className="px-3 py-6 text-center text-muted-foreground"
+                  >
                     No completed sales have been recorded for this yard.
                   </td>
                 </tr>
@@ -457,7 +499,9 @@ function OwnerOverview({
         <MetricCard
           label="Audit entries shown"
           value={liveLogs ? String(liveLogs.length) : "—"}
-          detail={liveLogs ? "Live immutable records" : "Load live data to view"}
+          detail={
+            liveLogs ? "Live immutable records" : "Load live data to view"
+          }
         />
       </section>
 
@@ -465,16 +509,24 @@ function OwnerOverview({
         <div className="rounded-2xl border bg-card p-5 shadow-sm">
           <h2 className="text-lg font-semibold">Fleet pipeline</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            {liveCars ? "Live vehicle counts by import stage" : "Load live data to view this yard's fleet"}
+            {liveCars
+              ? "Live vehicle counts by import stage"
+              : "Load live data to view this yard's fleet"}
           </p>
           <div className="mt-4 space-y-3">
             {statuses.map((status) => {
               const count =
-                liveCars?.filter((car) => car.status_badge === status.key).length ?? 0;
+                liveCars?.filter((car) => car.status_badge === status.key)
+                  .length ?? 0;
               return (
-                <div key={status.key} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+                <div
+                  key={status.key}
+                  className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
+                >
                   <span>{status.label}</span>
-                  <span className="font-semibold">{liveCars ? count : "—"}</span>
+                  <span className="font-semibold">
+                    {liveCars ? count : "—"}
+                  </span>
                 </div>
               );
             })}
@@ -519,20 +571,28 @@ function AuditTable({
         </button>
       </div>
       <div className="mt-4 space-y-3">
-        {logs
-          ? logs.map((log) => (
-              <article key={log.id} className="rounded-xl border p-3">
-                <div className="flex flex-wrap justify-between gap-1 text-xs text-muted-foreground">
-                  <span>{new Date(log.timestamp).toLocaleString("en-KE")}</span>
-                  <span>{log.worker_email}</span>
-                </div>
-                <p className="mt-2 text-sm font-medium">{log.action_performed}</p>
-                <p className="mt-1 font-mono text-xs text-muted-foreground">Record: {log.record_id}</p>
-              </article>
-            ))
-          : <p className="py-3 text-sm text-muted-foreground">Load live audit records to view this yard's activity.</p>}
+        {logs ? (
+          logs.map((log) => (
+            <article key={log.id} className="rounded-xl border p-3">
+              <div className="flex flex-wrap justify-between gap-1 text-xs text-muted-foreground">
+                <span>{new Date(log.timestamp).toLocaleString("en-KE")}</span>
+                <span>{log.worker_email}</span>
+              </div>
+              <p className="mt-2 text-sm font-medium">{log.action_performed}</p>
+              <p className="mt-1 font-mono text-xs text-muted-foreground">
+                Record: {log.record_id}
+              </p>
+            </article>
+          ))
+        ) : (
+          <p className="py-3 text-sm text-muted-foreground">
+            Load live audit records to view this yard's activity.
+          </p>
+        )}
         {logs?.length === 0 && (
-          <p className="py-3 text-sm text-muted-foreground">No audit entries recorded for this yard.</p>
+          <p className="py-3 text-sm text-muted-foreground">
+            No audit entries recorded for this yard.
+          </p>
         )}
       </div>
     </section>
@@ -576,7 +636,11 @@ function StaffTable({
         disabled={loading}
         className="mb-4 rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50"
       >
-        {loading ? "Loading…" : liveStaff ? "Refresh live staff" : "Load live staff"}
+        {loading
+          ? "Loading…"
+          : liveStaff
+            ? "Refresh live staff"
+            : "Load live staff"}
       </button>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[620px] text-left text-sm">
@@ -597,9 +661,13 @@ function StaffTable({
                 <tr key={staff.id}>
                   <td className="px-3 py-4 font-medium">{staff.name}</td>
                   <td className="px-3 py-4">{staff.email}</td>
-                  <td className="px-3 py-4">{staff.role.replaceAll("_", " ")}</td>
                   <td className="px-3 py-4">
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${inactive ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"}`}>
+                    {staff.role.replaceAll("_", " ")}
+                  </td>
+                  <td className="px-3 py-4">
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${inactive ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"}`}
+                    >
                       {inactive ? "Deactivated" : "Active"}
                     </span>
                   </td>
@@ -610,9 +678,7 @@ function StaffTable({
                       onClick={() => onDeactivateLiveWorker(staff.id)}
                       className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      {inactive
-                        ? "Deactivated"
-                        : "Deactivate Account"}
+                      {inactive ? "Deactivated" : "Deactivate Account"}
                     </button>
                   </td>
                 </tr>
@@ -620,14 +686,20 @@ function StaffTable({
             })}
             {liveStaff?.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                <td
+                  colSpan={5}
+                  className="px-3 py-6 text-center text-sm text-muted-foreground"
+                >
                   No workers are registered for this yard.
                 </td>
               </tr>
             )}
             {liveStaff === null && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                <td
+                  colSpan={5}
+                  className="px-3 py-6 text-center text-sm text-muted-foreground"
+                >
                   Load live staff records to see available accounts.
                 </td>
               </tr>
@@ -650,8 +722,16 @@ function CostingDialog({
 }) {
   const saveCar = useServerFn(createCarWithImportCosts);
   const [busy, setBusy] = useState(false);
-  const [costs, setCosts] = useState({ cif: 0, duty: 0, port: 0, transport: 0 });
-  const [tradeTerms, setTradeTerms] = useState({ wholesalePrice: "", commissionRate: "" });
+  const [costs, setCosts] = useState({
+    cif: 0,
+    duty: 0,
+    port: 0,
+    transport: 0,
+  });
+  const [tradeTerms, setTradeTerms] = useState({
+    wholesalePrice: "",
+    commissionRate: "",
+  });
   const total = costs.cif + costs.duty + costs.port + costs.transport;
 
   function updateCost(key: keyof typeof costs, value: string) {
@@ -663,6 +743,7 @@ function CostingDialog({
     const form = new FormData(event.currentTarget);
     setBusy(true);
     try {
+      const headers = await getSupabaseAuthHeaders();
       const result = await saveCar({
         data: {
           brand: String(form.get("brand")),
@@ -683,8 +764,11 @@ function CostingDialog({
           brokerWholesalePrice: Number(tradeTerms.wholesalePrice),
           brokerCommissionRatePercent: Number(tradeTerms.commissionRate),
         },
+        headers,
       });
-      toast.success(`Vehicle saved. Total true cost: ${formatKsh(result.totalTrueCostKsh)}.`);
+      toast.success(
+        `Vehicle saved. Total true cost: ${formatKsh(result.totalTrueCostKsh)}.`,
+      );
       onOpenChange(false);
       onSaved();
     } catch (error) {
@@ -712,30 +796,55 @@ function CostingDialog({
         <DialogHeader>
           <DialogTitle>Vehicle Sourcing &amp; Costing</DialogTitle>
           <DialogDescription>
-            Costs total automatically. Saving requires a signed-in yard owner or manager.
+            Costs total automatically. Saving requires a signed-in yard owner or
+            manager.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-sm font-medium">
               Brand
-              <input name="brand" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              <input
+                name="brand"
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
             </label>
             <label className="space-y-1 text-sm font-medium">
               Model
-              <input name="model" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              <input
+                name="model"
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
             </label>
             <label className="space-y-1 text-sm font-medium">
               Year
-              <input name="year" type="number" min="1900" max="2100" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              <input
+                name="year"
+                type="number"
+                min="1900"
+                max="2100"
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
             </label>
             <label className="space-y-1 text-sm font-medium">
               Selling price (KSh)
-              <input name="sellingPrice" type="number" min="1" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              <input
+                name="sellingPrice"
+                type="number"
+                min="1"
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
             </label>
             <label className="space-y-1 text-sm font-medium sm:col-span-2">
               Chassis number
-              <input name="chassisNumber" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              <input
+                name="chassisNumber"
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
             </label>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -790,8 +899,12 @@ function CostingDialog({
             </label>
           </div>
           <div className="rounded-xl bg-muted p-4">
-            <p className="text-sm font-medium text-muted-foreground">Total True Cost</p>
-            <p className="mt-1 text-2xl font-bold text-primary">{formatKsh(total)}</p>
+            <p className="text-sm font-medium text-muted-foreground">
+              Total True Cost
+            </p>
+            <p className="mt-1 text-2xl font-bold text-primary">
+              {formatKsh(total)}
+            </p>
           </div>
           <button
             type="submit"

@@ -4,6 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { MetricCard, PortalShell } from "@/components/PortalShell";
 import { formatKsh } from "@/lib/format";
+import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import {
   getBrokerDashboard,
   submitBrokerLead,
@@ -17,9 +18,9 @@ export const Route = createFileRoute("/broker")({
 function BrokerDashboard() {
   const loadDashboard = useServerFn(getBrokerDashboard);
   const saveLead = useServerFn(submitBrokerLead);
-  const [dashboard, setDashboard] = useState<
-    Awaited<ReturnType<typeof getBrokerDashboard>> | null
-  >(null);
+  const [dashboard, setDashboard] = useState<Awaited<
+    ReturnType<typeof getBrokerDashboard>
+  > | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedCarId, setSelectedCarId] = useState("");
@@ -27,12 +28,13 @@ function BrokerDashboard() {
   async function refreshDashboard(showToast = true) {
     setLoading(true);
     try {
-      const result = await loadDashboard();
+      const headers = await getSupabaseAuthHeaders();
+      const result = await loadDashboard({ headers });
       setDashboard(result);
       setSelectedCarId((current) =>
         result.cars.some((car) => car.id === current)
           ? current
-          : result.cars[0]?.id ?? "",
+          : (result.cars[0]?.id ?? ""),
       );
       if (showToast) toast.success("Live broker records loaded.");
     } catch (error) {
@@ -71,12 +73,14 @@ function BrokerDashboard() {
     const form = new FormData(formElement);
     setSubmitting(true);
     try {
+      const headers = await getSupabaseAuthHeaders();
       await saveLead({
         data: {
           carId: selectedCarId,
           customerName: String(form.get("customerName")),
           customerPhone: String(form.get("customerPhone")),
         },
+        headers,
       });
       formElement.reset();
       toast.success("Customer lead saved.");
@@ -84,7 +88,9 @@ function BrokerDashboard() {
     } catch (error) {
       console.error("Could not submit broker lead", error);
       toast.error(
-        error instanceof Error ? error.message : "Could not save this customer lead.",
+        error instanceof Error
+          ? error.message
+          : "Could not save this customer lead.",
       );
     } finally {
       setSubmitting(false);
@@ -98,7 +104,8 @@ function BrokerDashboard() {
     >
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4">
         <p className="text-sm text-muted-foreground">
-          Sign in with an active salesperson worker account to load your yard records.
+          Sign in with an active salesperson worker account to load your yard
+          records.
         </p>
         <button
           type="button"
@@ -106,14 +113,20 @@ function BrokerDashboard() {
           disabled={loading}
           className="h-10 rounded-lg border px-4 text-sm font-semibold disabled:opacity-50"
         >
-          {loading ? "Loading…" : dashboard ? "Refresh broker records" : "Load broker records"}
+          {loading
+            ? "Loading…"
+            : dashboard
+              ? "Refresh broker records"
+              : "Load broker records"}
         </button>
       </div>
 
       <section className="grid gap-4 sm:grid-cols-2">
         <MetricCard
           label="Commissions Earned (KSh)"
-          value={dashboard ? formatKsh(Number(dashboard.commissionEarnedKsh)) : "—"}
+          value={
+            dashboard ? formatKsh(Number(dashboard.commissionEarnedKsh)) : "—"
+          }
           detail="Recorded only after a dealer completes a vehicle sale"
         />
         <MetricCard
@@ -127,7 +140,8 @@ function BrokerDashboard() {
         <div className="mb-4">
           <h2 className="text-xl font-semibold">Private broker inventory</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Wholesale costs and commission rates are private yard records, not public catalog data.
+            Wholesale costs and commission rates are private yard records, not
+            public catalog data.
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -147,8 +161,12 @@ function BrokerDashboard() {
                   <td className="px-3 py-4 font-medium">
                     {vehicle.year} {vehicle.brand} {vehicle.model}
                   </td>
-                  <td className="px-3 py-4">{formatKsh(Number(vehicle.selling_price))}</td>
-                  <td className="px-3 py-4">{formatKsh(Number(vehicle.wholesale_price))}</td>
+                  <td className="px-3 py-4">
+                    {formatKsh(Number(vehicle.selling_price))}
+                  </td>
+                  <td className="px-3 py-4">
+                    {formatKsh(Number(vehicle.wholesale_price))}
+                  </td>
                   <td className="px-3 py-4 font-semibold text-primary">
                     {Number(vehicle.broker_commission_rate_percent)}%
                   </td>
@@ -165,15 +183,23 @@ function BrokerDashboard() {
               ))}
               {dashboard?.cars.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
-                    No active vehicles with broker terms are available in your yard.
+                  <td
+                    colSpan={5}
+                    className="px-3 py-8 text-center text-muted-foreground"
+                  >
+                    No active vehicles with broker terms are available in your
+                    yard.
                   </td>
                 </tr>
               )}
               {!dashboard && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">
-                    Load your authenticated broker account to view private inventory.
+                  <td
+                    colSpan={5}
+                    className="px-3 py-8 text-center text-muted-foreground"
+                  >
+                    Load your authenticated broker account to view private
+                    inventory.
                   </td>
                 </tr>
               )}
@@ -189,7 +215,8 @@ function BrokerDashboard() {
         >
           <h2 className="text-xl font-semibold">Submit Customer Lead</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Customer contact details are visible only to this salesperson and authorized yard staff.
+            Customer contact details are visible only to this salesperson and
+            authorized yard staff.
           </p>
           <div className="mt-5 space-y-4">
             <label className="block space-y-1.5 text-sm font-medium">
@@ -224,7 +251,9 @@ function BrokerDashboard() {
                     {vehicle.year} {vehicle.brand} {vehicle.model}
                   </option>
                 ))}
-                {!dashboard?.cars.length && <option value="">No available vehicles</option>}
+                {!dashboard?.cars.length && (
+                  <option value="">No available vehicles</option>
+                )}
               </select>
             </label>
           </div>
@@ -245,7 +274,9 @@ function BrokerDashboard() {
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <p className="font-semibold">{lead.customer_name}</p>
-                    <p className="text-sm text-muted-foreground">{lead.customer_phone}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lead.customer_phone}
+                    </p>
                   </div>
                   <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
                     {lead.status}
@@ -276,7 +307,8 @@ function BrokerDashboard() {
       <section className="mt-8 rounded-2xl border bg-card p-5 shadow-sm">
         <h2 className="text-xl font-semibold">Completed-sale commissions</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Commission amounts are calculated by the database from each recorded final sale price.
+          Commission amounts are calculated by the database from each recorded
+          final sale price.
         </p>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm">
@@ -295,8 +327,12 @@ function BrokerDashboard() {
                   <td className="px-3 py-4 font-medium">
                     {commission.year} {commission.brand} {commission.model}
                   </td>
-                  <td className="px-3 py-4">{formatKsh(Number(commission.final_sale_price))}</td>
-                  <td className="px-3 py-4">{Number(commission.commission_rate_percent)}%</td>
+                  <td className="px-3 py-4">
+                    {formatKsh(Number(commission.final_sale_price))}
+                  </td>
+                  <td className="px-3 py-4">
+                    {Number(commission.commission_rate_percent)}%
+                  </td>
                   <td className="px-3 py-4 font-semibold text-primary">
                     {formatKsh(Number(commission.commission_amount))}
                   </td>
@@ -307,14 +343,20 @@ function BrokerDashboard() {
               ))}
               {dashboard?.commissions.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                  <td
+                    colSpan={5}
+                    className="px-3 py-6 text-center text-muted-foreground"
+                  >
                     No completed-sale commissions have been recorded.
                   </td>
                 </tr>
               )}
               {!dashboard && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                  <td
+                    colSpan={5}
+                    className="px-3 py-6 text-center text-muted-foreground"
+                  >
                     Load your broker account to view commission records.
                   </td>
                 </tr>

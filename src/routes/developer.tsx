@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { MetricCard, PortalShell } from "@/components/PortalShell";
 import { getSystemStatus } from "@/lib/catalog.functions";
+import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import {
   createDealerAccount,
   getDeveloperDashboard,
@@ -48,7 +49,8 @@ function DeveloperAdmin() {
     async (quiet = false) => {
       setLoadingDashboard(true);
       try {
-        const result = await loadDashboard();
+        const headers = await getSupabaseAuthHeaders();
+        const result = await loadDashboard({ headers });
         setDashboard(result);
         setAccessStatus("authorized");
         setAccessError("");
@@ -79,7 +81,11 @@ function DeveloperAdmin() {
   async function toggleSystem() {
     setBusy(true);
     try {
-      const result = await setSystemActive({ data: { active: !active } });
+      const headers = await getSupabaseAuthHeaders();
+      const result = await setSystemActive({
+        data: { active: !active },
+        headers,
+      });
       setActive(result.active);
       setConfirmOpen(false);
       toast.success(
@@ -106,6 +112,7 @@ function DeveloperAdmin() {
     const form = new FormData(formElement);
     setCreatingDealer(true);
     try {
+      const headers = await getSupabaseAuthHeaders();
       await saveDealer({
         data: {
           showroomName: String(form.get("showroomName")),
@@ -118,6 +125,7 @@ function DeveloperAdmin() {
             String(form.get("subscriptionExpiresAt")),
           ).toISOString(),
         },
+        headers,
       });
       formElement.reset();
       toast.success("Dealer workspace and owner record created.");

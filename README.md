@@ -35,10 +35,13 @@ Auth remains the identity provider for protected server functions. Configure
 `DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY` only in the server
 environment. Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`
 as Railway build variables because Vite embeds them into the browser bundle.
+Set the Supabase URL to the project root (for example,
+`https://<project-ref>.supabase.co`), not an `/auth/v1` or `/rest/v1` endpoint.
 Never expose `DATABASE_URL` or a Supabase service-role key through a `VITE_`
 variable.
-Enable the desired email and Google providers in Supabase Auth and add the
-deployed app origin to the Auth redirect URL allowlist.
+For Google sign-in, enable the Google provider under Supabase Authentication
+providers and configure its Google OAuth client callback. Set the Supabase Site
+URL to the deployed app origin and allowlist the app's sign-in redirect URL.
 
 For Railway, build with `npm run build` and start with `npm start`. The start
 script uses Railway's injected `PORT`; it defaults to port `8080` for local or
