@@ -10,11 +10,29 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as BrokerRouteImport } from './routes/broker'
+import { Route as DealerRouteImport } from './routes/dealer'
+import { Route as DeveloperRouteImport } from './routes/developer'
 import { Route as CarsIdRouteImport } from './routes/cars.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BrokerRoute = BrokerRouteImport.update({
+  id: '/broker',
+  path: '/broker',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DealerRoute = DealerRouteImport.update({
+  id: '/dealer',
+  path: '/dealer',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeveloperRoute = DeveloperRouteImport.update({
+  id: '/developer',
+  path: '/developer',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CarsIdRoute = CarsIdRouteImport.update({
@@ -25,27 +43,39 @@ const CarsIdRoute = CarsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/broker': typeof BrokerRoute
+  '/dealer': typeof DealerRoute
+  '/developer': typeof DeveloperRoute
   '/cars/$id': typeof CarsIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/broker': typeof BrokerRoute
+  '/dealer': typeof DealerRoute
+  '/developer': typeof DeveloperRoute
   '/cars/$id': typeof CarsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/broker': typeof BrokerRoute
+  '/dealer': typeof DealerRoute
+  '/developer': typeof DeveloperRoute
   '/cars/$id': typeof CarsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/cars/$id'
+  fullPaths: '/' | '/broker' | '/dealer' | '/developer' | '/cars/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/cars/$id'
-  id: '__root__' | '/' | '/cars/$id'
+  to: '/' | '/broker' | '/dealer' | '/developer' | '/cars/$id'
+  id: '__root__' | '/' | '/broker' | '/dealer' | '/developer' | '/cars/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  BrokerRoute: typeof BrokerRoute
+  DealerRoute: typeof DealerRoute
+  DeveloperRoute: typeof DeveloperRoute
   CarsIdRoute: typeof CarsIdRoute
 }
 
@@ -56,6 +86,27 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/broker': {
+      id: '/broker'
+      path: '/broker'
+      fullPath: '/broker'
+      preLoaderRoute: typeof BrokerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dealer': {
+      id: '/dealer'
+      path: '/dealer'
+      fullPath: '/dealer'
+      preLoaderRoute: typeof DealerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/developer': {
+      id: '/developer'
+      path: '/developer'
+      fullPath: '/developer'
+      preLoaderRoute: typeof DeveloperRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cars/$id': {
@@ -70,6 +121,9 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  BrokerRoute: BrokerRoute,
+  DealerRoute: DealerRoute,
+  DeveloperRoute: DeveloperRoute,
   CarsIdRoute: CarsIdRoute,
 }
 export const routeTree = rootRouteImport

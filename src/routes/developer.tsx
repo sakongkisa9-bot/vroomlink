@@ -15,6 +15,7 @@ import { getSystemStatus } from "@/lib/catalog.functions";
 import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import {
   createDealerAccount,
+  deleteDealer,
   getDeveloperDashboard,
   setDealerAvailability,
   setRailwaySystemActive,
@@ -33,6 +34,7 @@ function DeveloperAdmin() {
   const setSystemActive = useServerFn(setRailwaySystemActive);
   const loadDashboard = useServerFn(getDeveloperDashboard);
   const saveDealer = useServerFn(createDealerAccount);
+  const removeDealer = useServerFn(deleteDealer);
   const updateDealerAvailability = useServerFn(setDealerAvailability);
   const [active, setActive] = useState(initialActive);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -52,6 +54,11 @@ function DeveloperAdmin() {
     active: boolean;
   } | null>(null);
   const [updatingYards, setUpdatingYards] = useState(false);
+  const [yardToDelete, setYardToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [deletingYard, setDeletingYard] = useState(false);
 
   const refreshDashboard = useCallback(
     async (quiet = false) => {
@@ -178,6 +185,33 @@ function DeveloperAdmin() {
       );
     } finally {
       setUpdatingYards(false);
+    }
+  }
+
+  async function permanentlyDeleteYard() {
+    if (!yardToDelete) return;
+    setDeletingYard(true);
+    try {
+      const headers = await getSupabaseAuthHeaders();
+      await removeDealer({
+        data: { dealerId: yardToDelete.id },
+        headers,
+      });
+      setSelectedYardIds((selected) =>
+        selected.filter((id) => id !== yardToDelete.id),
+      );
+      setYardToDelete(null);
+      toast.success(
+        `${yardToDelete.name} and its operational records deleted.`,
+      );
+      await refreshDashboard(true);
+    } catch (error) {
+      console.error("Could not permanently delete car yard", error);
+      toast.error(
+        error instanceof Error ? error.message : "Could not delete car yard.",
+      );
+    } finally {
+      setDeletingYard(false);
     }
   }
 
@@ -515,6 +549,19 @@ function DeveloperAdmin() {
                               ? "Shut down yard"
                               : "Restore yard"}
                           </button>
+                          <button
+                            type="button"
+                            disabled={deletingYard}
+                            onClick={() =>
+                              setYardToDelete({
+                                id: dealer.id,
+                                name: dealer.showroom_name,
+                              })
+                            }
+                            className="h-9 rounded-lg border border-red-300 px-3 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            Delete yard
+                          </button>
                         </div>
                       </div>
                       <dl className="mt-4 grid gap-3 border-t pt-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
@@ -698,6 +745,41 @@ function DeveloperAdmin() {
                     : yardAction?.active
                       ? "Restore yards"
                       : "Confirm shutdown"}
+                </button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog
+            open={yardToDelete !== null}
+            onOpenChange={(open: boolean) => {
+              if (!open && !deletingYard) setYardToDelete(null);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete this car yard permanently?</DialogTitle>
+                <DialogDescription>
+                  This permanently deletes {yardToDelete?.name}, including its
+                  vehicles, staff, sales, and subscription records. This cannot
+                  be undone. Immutable audit logs are retained.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <button
+                  type="button"
+                  disabled={deletingYard}
+                  onClick={() => setYardToDelete(null)}
+                  className="h-10 rounded-lg border px-4 text-sm font-semibold disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingYard || !yardToDelete}
+                  onClick={() => void permanentlyDeleteYard()}
+                  className="h-10 rounded-lg bg-red-700 px-4 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {deletingYard ? "Deleting…" : "Permanently delete yard"}
                 </button>
               </DialogFooter>
             </DialogContent>

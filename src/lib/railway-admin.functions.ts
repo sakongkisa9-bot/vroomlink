@@ -517,6 +517,38 @@ export const deactivateDealerWorker = createServerFn({ method: "POST" })
     });
   });
 
+const createDealerBrokerSchema = z.object({
+  dealerId: uuid,
+  fullName: z.string().trim().min(2).max(160),
+  email: z.string().trim().email().max(254),
+});
+
+export const createDealerBroker = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof createDealerBrokerSchema>) =>
+    createDealerBrokerSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const actor = principal(context);
+    return withRailwayTransaction(actor, async (transaction) => {
+      await assertDealerWorker(transaction, data.dealerId, actor.userId, [
+        "OWNER",
+      ]);
+
+      const [worker] = await transaction<{ id: string }[]>`
+        insert into workers (dealer_id, full_name, email, workspace_role)
+        values (${data.dealerId}, ${data.fullName}, ${data.email}, 'SALESPERSON')
+        on conflict (dealer_id, email) do nothing
+        returning id
+      `;
+      if (!worker)
+        throw new Error(
+          "A worker with this email already exists in this yard.",
+        );
+      return { workerId: worker.id };
+    });
+  });
+
 const setSystemActiveSchema = z.object({ active: z.boolean() });
 
 export const setRailwaySystemActive = createServerFn({ method: "POST" })
@@ -709,10 +741,10 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
       return {
         dealerId,
         currentRole: worker.workspace_role,
-        cars,
-        staff,
-        logs,
-        sales,
+        cars: [...cars],
+        staff: [...staff],
+        logs: [...logs],
+        sales: [...sales],
       };
     });
   });
@@ -869,6 +901,33 @@ export const setDealerAvailability = createServerFn({ method: "POST" })
         }
 
         return { dealerIds: updatedIds, active: data.active };
+      },
+    );
+  });
+
+const deleteDealerSchema = z.object({ dealerId: uuid });
+
+export const deleteDealer = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: z.input<typeof deleteDealerSchema>) =>
+    deleteDealerSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    await assertSuperAdmin(context);
+    const actor = principal(context);
+    return withRailwayTransaction(
+      { ...actor, superAdmin: true, allowMaintenance: true },
+      async (transaction) => {
+        const [dealer] = await transaction<{ id: string }[]>`
+          delete from dealers
+          where id = ${data.dealerId}
+          returning id
+        `;
+        if (!dealer)
+          throw new Error(
+            "Car yard not found. Refresh the dashboard and try again.",
+          );
+        return { dealerId: dealer.id };
       },
     );
   });

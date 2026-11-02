@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { PortalShell, MetricCard } from "@/components/PortalShell";
 import {
+  createDealerBroker,
   createCarWithImportCosts,
   deactivateDealerWorker,
   getDealerDashboard,
@@ -33,7 +34,7 @@ export const Route = createFileRoute("/dealer")({
 
 function DealerConsole() {
   const [currentRole, setCurrentRole] = useState<
-    "OWNER" | "YARD_MANAGER" | null
+    "OWNER" | "YARD_MANAGER" | "SALESPERSON" | null
   >(null);
   const [section, setSection] = useState<"overview" | "staff" | "sales">(
     "overview",
@@ -45,6 +46,8 @@ function DealerConsole() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const loadDashboard = useServerFn(getDealerDashboard);
   const deactivateWorker = useServerFn(deactivateDealerWorker);
+  const addBroker = useServerFn(createDealerBroker);
+  const [creatingBroker, setCreatingBroker] = useState(false);
 
   async function loadOwnerDashboard() {
     setLoadingDashboard(true);
@@ -65,6 +68,57 @@ function DealerConsole() {
       );
     } finally {
       setLoadingDashboard(false);
+    }
+  }
+
+  async function createLiveBroker(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    if (!liveDashboard || currentRole !== "OWNER") {
+      toast.error("Load the yard as an owner before adding a broker.");
+      return;
+    }
+
+    const form = new FormData(formElement);
+    setCreatingBroker(true);
+    try {
+      const headers = await getSupabaseAuthHeaders();
+      const result = await addBroker({
+        data: {
+          dealerId: liveDashboard.dealerId,
+          fullName: String(form.get("brokerName")),
+          email: String(form.get("brokerEmail")),
+        },
+        headers,
+      });
+      setLiveDashboard((current) =>
+        current
+          ? {
+              ...current,
+              staff: [
+                ...current.staff,
+                {
+                  id: result.workerId,
+                  full_name: String(form.get("brokerName")).trim(),
+                  email: String(form.get("brokerEmail")).trim(),
+                  workspace_role: "SALESPERSON",
+                  is_active: true,
+                },
+              ],
+            }
+          : current,
+      );
+      formElement.reset();
+      toast.success(
+        "Broker added. They can sign in using this email to access the broker portal.",
+      );
+    } catch (error) {
+      console.error("Could not add dealer broker", error);
+      toast.error(
+        error instanceof Error ? error.message : "Could not add broker.",
+      );
+    } finally {
+      setCreatingBroker(false);
     }
   }
 
@@ -273,6 +327,9 @@ function DealerConsole() {
             <StaffTable
               liveStaff={liveDashboard?.staff ?? null}
               loading={loadingDashboard}
+              canCreateBroker={currentRole === "OWNER"}
+              creatingBroker={creatingBroker}
+              onCreateBroker={(event) => void createLiveBroker(event)}
               onLoadLiveData={() => void loadOwnerDashboard()}
               onDeactivateLiveWorker={(id) => void deactivateLiveWorker(id)}
             />
@@ -371,7 +428,7 @@ function SalesManagement({
             </select>
           </label>
           <label className="space-y-1.5 text-sm font-medium">
-            Referred salesperson
+            Broker
             <select
               name="brokerWorkerId"
               className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
@@ -602,11 +659,17 @@ function AuditTable({
 function StaffTable({
   liveStaff,
   loading,
+  canCreateBroker,
+  creatingBroker,
+  onCreateBroker,
   onLoadLiveData,
   onDeactivateLiveWorker,
 }: {
   liveStaff: Awaited<ReturnType<typeof getDealerDashboard>>["staff"] | null;
   loading: boolean;
+  canCreateBroker: boolean;
+  creatingBroker: boolean;
+  onCreateBroker: (event: FormEvent<HTMLFormElement>) => void;
   onLoadLiveData: () => void;
   onDeactivateLiveWorker: (id: string) => void;
 }) {
@@ -626,7 +689,7 @@ function StaffTable({
         <h2 className="text-xl font-semibold">Manage Staff</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {liveStaff
-            ? "Live staff records. Deactivation requires an authenticated yard owner."
+            ? "Live staff records. Adding brokers and deactivating workers requires an authenticated yard owner."
             : "Load live staff records to manage this yard's worker access."}
         </p>
       </div>
@@ -642,6 +705,40 @@ function StaffTable({
             ? "Refresh live staff"
             : "Load live staff"}
       </button>
+      {canCreateBroker && liveStaff && (
+        <form
+          onSubmit={onCreateBroker}
+          className="mb-5 grid gap-3 rounded-xl border bg-muted/30 p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+        >
+          <label className="space-y-1.5 text-sm font-medium">
+            Broker full name
+            <input
+              name="brokerName"
+              required
+              minLength={2}
+              maxLength={160}
+              className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+            />
+          </label>
+          <label className="space-y-1.5 text-sm font-medium">
+            Broker sign-in email
+            <input
+              name="brokerEmail"
+              type="email"
+              required
+              maxLength={254}
+              className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={creatingBroker}
+            className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            {creatingBroker ? "Adding…" : "Add broker"}
+          </button>
+        </form>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[620px] text-left text-sm">
           <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
@@ -662,7 +759,9 @@ function StaffTable({
                   <td className="px-3 py-4 font-medium">{staff.name}</td>
                   <td className="px-3 py-4">{staff.email}</td>
                   <td className="px-3 py-4">
-                    {staff.role.replaceAll("_", " ")}
+                    {staff.role === "SALESPERSON"
+                      ? "Broker"
+                      : staff.role.replaceAll("_", " ")}
                   </td>
                   <td className="px-3 py-4">
                     <span
