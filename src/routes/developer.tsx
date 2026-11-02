@@ -21,6 +21,7 @@ import {
   setRailwaySystemActive,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
+import { YardQrCodeButton } from "@/components/YardQrCodeButton";
 
 export const Route = createFileRoute("/developer")({
   loader: () => getSystemStatus(),
@@ -520,6 +521,10 @@ function DeveloperAdmin() {
                           </p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
+                          <YardQrCodeButton
+                            yardName={dealer.showroom_name}
+                            slug={dealer.slug}
+                          />
                           <span
                             className={`rounded-full px-2.5 py-1 text-xs font-semibold ${subscriptionActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}
                           >

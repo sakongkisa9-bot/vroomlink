@@ -10,11 +10,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-export function SiteHeader({ q, onSearch }: { q?: string | undefined; onSearch?: (q: string) => void }) {
+export function SiteHeader({
+  q,
+  onSearch,
+}: {
+  q?: string | undefined;
+  onSearch?: (q: string) => void;
+}) {
   return (
     <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4">
-        <Link to="/" search={{}} className="font-display text-xl font-bold tracking-tight text-foreground">
+        <Link
+          to="/"
+          search={{}}
+          className="font-display text-xl font-bold tracking-tight text-foreground"
+        >
           Vroom<span className="text-primary">Link</span>
         </Link>
         {onSearch && (
@@ -38,6 +48,9 @@ export function SiteHeader({ q, onSearch }: { q?: string | undefined; onSearch?:
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link to="/broker">Broker Dashboard</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/salesperson">Salesperson Workspace</Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link to="/dealer">Car Dealer Console</Link>

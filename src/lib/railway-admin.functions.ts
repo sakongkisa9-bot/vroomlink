@@ -9,6 +9,7 @@ import { withRailwayTransaction } from "./railway.server";
 
 const uuid = z.string().uuid();
 const money = z.number().int().safe().nonnegative();
+type WorkspaceRole = "OWNER" | "YARD_MANAGER" | "SALESPERSON" | "BROKER";
 
 const createCarSchema = z.object({
   dealerId: uuid.optional(),
@@ -116,7 +117,7 @@ async function assertDealerWorker(
   transaction: TransactionSql,
   dealerId: string,
   userId: string,
-  allowedRoles: readonly ("OWNER" | "YARD_MANAGER" | "SALESPERSON")[],
+  allowedRoles: readonly WorkspaceRole[],
 ) {
   const rows = await transaction`
     select w.id, w.auth_user_id, w.email, w.workspace_role
@@ -132,6 +133,7 @@ async function assertDealerWorker(
         (${allowedRoles.includes("OWNER")} and w.workspace_role = 'OWNER')
         or (${allowedRoles.includes("YARD_MANAGER")} and w.workspace_role = 'YARD_MANAGER')
         or (${allowedRoles.includes("SALESPERSON")} and w.workspace_role = 'SALESPERSON')
+        or (${allowedRoles.includes("BROKER")} and w.workspace_role = 'BROKER')
       )
     limit 1
   `;
@@ -141,7 +143,7 @@ async function assertDealerWorker(
     id: string;
     auth_user_id: string;
     email: string;
-    workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+    workspace_role: WorkspaceRole;
   };
 }
 
@@ -149,7 +151,7 @@ async function resolveCurrentDealerId(
   transaction: TransactionSql,
   userId: string,
   requestedDealerId?: string,
-  allowedRoles: readonly ("OWNER" | "YARD_MANAGER" | "SALESPERSON")[] = [],
+  allowedRoles: readonly WorkspaceRole[] = [],
 ): Promise<string> {
   if (requestedDealerId) return requestedDealerId;
 
@@ -166,6 +168,7 @@ async function resolveCurrentDealerId(
         (${allowedRoles.includes("OWNER")} and w.workspace_role = 'OWNER')
         or (${allowedRoles.includes("YARD_MANAGER")} and w.workspace_role = 'YARD_MANAGER')
         or (${allowedRoles.includes("SALESPERSON")} and w.workspace_role = 'SALESPERSON')
+        or (${allowedRoles.includes("BROKER")} and w.workspace_role = 'BROKER')
       )
     order by w.created_at asc
     limit 1
@@ -189,13 +192,13 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
         transaction,
         actor.userId,
         data.dealerId,
-        ["OWNER", "YARD_MANAGER"],
+        ["OWNER", "YARD_MANAGER", "SALESPERSON"],
       );
       const worker = await assertDealerWorker(
         transaction,
         dealerId,
         actor.userId,
-        ["OWNER", "YARD_MANAGER"],
+        ["OWNER", "YARD_MANAGER", "SALESPERSON"],
       );
       const [dealer] = await transaction<{ active: boolean }[]>`
         select is_active and subscription_status = 'ACTIVE'
@@ -264,14 +267,18 @@ export const getBrokerDashboard = createServerFn({ method: "GET" })
         transaction,
         actor.userId,
         undefined,
-        ["SALESPERSON"],
+        ["BROKER"],
       );
       const worker = await assertDealerWorker(
         transaction,
         dealerId,
         actor.userId,
-        ["SALESPERSON"],
+        ["BROKER"],
       );
+      const [yard] = await transaction<{ slug: string }[]>`
+        select slug from dealers where id = ${dealerId}
+      `;
+      if (!yard) throw new Error("The assigned car yard could not be found.");
 
       const cars = await transaction<
         {
@@ -361,6 +368,7 @@ export const getBrokerDashboard = createServerFn({ method: "GET" })
       return {
         brokerWorkerId: worker.id,
         dealerId,
+        yardSlug: yard.slug,
         cars,
         leads,
         commissions,
@@ -382,13 +390,13 @@ export const submitBrokerLead = createServerFn({ method: "POST" })
         transaction,
         actor.userId,
         undefined,
-        ["SALESPERSON"],
+        ["BROKER"],
       );
       const worker = await assertDealerWorker(
         transaction,
         dealerId,
         actor.userId,
-        ["SALESPERSON"],
+        ["BROKER"],
       );
       const [lead] = await transaction<{ id: string }[]>`
           insert into broker_leads (
@@ -427,13 +435,13 @@ export const recordCompletedVehicleSale = createServerFn({ method: "POST" })
         transaction,
         actor.userId,
         undefined,
-        ["OWNER", "YARD_MANAGER"],
+        ["OWNER", "YARD_MANAGER", "SALESPERSON"],
       );
       const worker = await assertDealerWorker(
         transaction,
         dealerId,
         actor.userId,
-        ["OWNER", "YARD_MANAGER"],
+        ["OWNER", "YARD_MANAGER", "SALESPERSON"],
       );
       const [sale] = await transaction<
         {
@@ -517,16 +525,17 @@ export const deactivateDealerWorker = createServerFn({ method: "POST" })
     });
   });
 
-const createDealerBrokerSchema = z.object({
+const createDealerWorkerSchema = z.object({
   dealerId: uuid,
   fullName: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(254),
+  workspaceRole: z.enum(["SALESPERSON", "BROKER"]),
 });
 
-export const createDealerBroker = createServerFn({ method: "POST" })
+export const createDealerWorker = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
-  .inputValidator((input: z.input<typeof createDealerBrokerSchema>) =>
-    createDealerBrokerSchema.parse(input),
+  .inputValidator((input: z.input<typeof createDealerWorkerSchema>) =>
+    createDealerWorkerSchema.parse(input),
   )
   .handler(async ({ data, context }) => {
     const actor = principal(context);
@@ -537,7 +546,9 @@ export const createDealerBroker = createServerFn({ method: "POST" })
 
       const [worker] = await transaction<{ id: string }[]>`
         insert into workers (dealer_id, full_name, email, workspace_role)
-        values (${data.dealerId}, ${data.fullName}, ${data.email}, 'SALESPERSON')
+        values (
+          ${data.dealerId}, ${data.fullName}, ${data.email}, ${data.workspaceRole}
+        )
         on conflict (dealer_id, email) do nothing
         returning id
       `;
@@ -638,7 +649,10 @@ export const recordSubscriptionPayment = createServerFn({ method: "POST" })
     );
   });
 
-const dealerDashboardSchema = z.object({ dealerId: uuid.optional() });
+const dealerDashboardSchema = z.object({
+  dealerId: uuid.optional(),
+  workspaceRole: z.enum(["OWNER", "SALESPERSON"]).default("OWNER"),
+});
 
 export const getDealerDashboard = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
@@ -652,14 +666,26 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
         transaction,
         actor.userId,
         data.dealerId,
-        ["OWNER", "YARD_MANAGER"],
+        [data.workspaceRole],
       );
       const worker = await assertDealerWorker(
         transaction,
         dealerId,
         actor.userId,
-        ["OWNER", "YARD_MANAGER"],
+        [data.workspaceRole],
       );
+      if (worker.workspace_role !== data.workspaceRole)
+        throw new Error("This workspace is not available to your worker role.");
+
+      const [dealer] = await transaction<
+        {
+          showroom_name: string;
+          slug: string;
+        }[]
+      >`
+        select showroom_name, slug from dealers where id = ${dealerId}
+      `;
+      if (!dealer) throw new Error("The assigned car yard could not be found.");
 
       const cars = await transaction<
         {
@@ -687,13 +713,17 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
           id: string;
           full_name: string;
           email: string;
-          workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+          workspace_role: WorkspaceRole;
           is_active: boolean;
         }[]
       >`
       select id, full_name, email, workspace_role, is_active
       from workers
       where dealer_id = ${dealerId}
+        and (
+          ${data.workspaceRole === "OWNER"}
+          or (workspace_role = 'BROKER' and is_active)
+        )
       order by created_at asc
     `;
 
@@ -740,6 +770,8 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
 
       return {
         dealerId,
+        yardName: dealer.showroom_name,
+        yardSlug: dealer.slug,
         currentRole: worker.workspace_role,
         cars: [...cars],
         staff: [...staff],
@@ -812,7 +844,7 @@ export const getDeveloperDashboard = createServerFn({ method: "GET" })
             dealer_id: string;
             full_name: string;
             email: string;
-            workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+            workspace_role: WorkspaceRole;
             is_active: boolean;
             login_linked: boolean;
           }[]
@@ -832,7 +864,7 @@ export const getDeveloperDashboard = createServerFn({ method: "GET" })
           dealer_id: string;
           full_name: string;
           email: string;
-          workspace_role: "OWNER" | "YARD_MANAGER" | "SALESPERSON";
+          workspace_role: WorkspaceRole;
           is_active: boolean;
           login_linked: boolean;
         };

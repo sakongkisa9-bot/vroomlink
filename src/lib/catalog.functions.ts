@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireRailwaySystemActiveMiddleware } from "@/integrations/railway-middleware";
 
-export type { PublicVehicle, VehicleStatus } from "./catalog.types";
+export type { PublicVehicle, PublicYard, VehicleStatus } from "./catalog.types";
 
 export const getSystemStatus = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -11,21 +11,46 @@ export const getSystemStatus = createServerFn({ method: "GET" }).handler(
   },
 );
 
-export const listPublicVehicles = createServerFn({ method: "GET" })
+export const listPublicYards = createServerFn({ method: "GET" })
   .middleware([requireRailwaySystemActiveMiddleware])
   .handler(async () => {
-    const { listRailwayPublicVehicles } = await import("./railway.server");
-    return listRailwayPublicVehicles();
+    const { listRailwayPublicYards } = await import("./railway.server");
+    return listRailwayPublicYards();
+  });
+
+const publicYardSchema = z.object({
+  slug: z
+    .string()
+    .trim()
+    .min(2)
+    .max(80)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+});
+
+export const getPublicYardMarketplace = createServerFn({ method: "GET" })
+  .middleware([requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof publicYardSchema>) =>
+    publicYardSchema.parse(input),
+  )
+  .handler(async ({ data }) => {
+    const { getRailwayPublicYardMarketplace } =
+      await import("./railway.server");
+    return getRailwayPublicYardMarketplace(data.slug);
   });
 
 export const getPublicVehicle = createServerFn({ method: "GET" })
   .middleware([requireRailwaySystemActiveMiddleware])
-  .inputValidator((input: { id: string }) =>
-    z.object({ id: z.string().uuid() }).parse(input),
+  .inputValidator((input: { id: string; yardSlug?: string }) =>
+    z
+      .object({
+        id: z.string().uuid(),
+        yardSlug: publicYardSchema.shape.slug.optional(),
+      })
+      .parse(input),
   )
   .handler(async ({ data }) => {
     const { getRailwayPublicVehicle } = await import("./railway.server");
-    return getRailwayPublicVehicle(data.id);
+    return getRailwayPublicVehicle(data.id, data.yardSlug);
   });
 
 const depositSchema = z.object({

@@ -62,6 +62,9 @@ npm run db:migrate -- 0002_link_authenticated_workers.sql
 npm run db:migrate -- 0003_broker_sales.sql
 npm run db:migrate -- 0004_super_admin_dealer_provisioning.sql
 npm run db:migrate -- 0005_dealer_availability.sql
+npm run db:migrate -- 0006_developer_yard_deletion.sql
+npm run db:migrate -- 0007_add_broker_workspace_role.sql
+npm run db:migrate -- 0008_separate_broker_and_salesperson_roles.sql
 ```
 
 The migration runner executes the checked-in SQL file using the project's
@@ -89,7 +92,7 @@ commission terms, salesperson-owned leads, and completed vehicle sales. New
 vehicle imports require a wholesale price and commission rate; existing
 vehicles are not assigned invented trade terms and must have terms provisioned
 before they appear in broker inventory. A broker commission is recorded only
-when an authorized yard owner or manager records a completed sale, and the
+when an authorized yard owner or salesperson records a completed sale, and the
 database calculates it from the final sale price and the vehicle's configured
 rate. Public catalog queries do not read trade-pricing records. Railway's
 dealer UUID is also exposed as the tenant `yard_id`, and role checks in the
@@ -104,6 +107,15 @@ booking deposits are unavailable until a super-admin restores it. The Developer
 Panel displays the yard's registered staff names, roles, sign-in emails, and
 whether each email has been linked to Supabase Auth; passwords are never
 available to the application.
+
+The public home page lists active yards; each yard's public catalog is available
+at `/yard/<slug>`. Yard QR codes link directly to that catalog. Migration
+`0007_add_broker_workspace_role.sql` must be applied before
+`0008_separate_broker_and_salesperson_roles.sql`: the latter moves existing
+salesperson-role accounts to the broker workspace and existing yard managers to
+the salesperson workspace. Yard owners manage staff and oversee the yard,
+salespeople manage inventory and record sales, and brokers use the referral
+workspace.
 
 Dealer subscriptions are marked expired on app transactions after their expiry
 time. For expiry processing independent of traffic, configure a Railway scheduled

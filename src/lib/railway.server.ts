@@ -1,5 +1,5 @@
 import postgres, { type TransactionSql } from "postgres";
-import type { PublicVehicle, VehicleStatus } from "./catalog.types";
+import type { PublicVehicle, PublicYard, VehicleStatus } from "./catalog.types";
 
 let client: ReturnType<typeof postgres> | undefined;
 
@@ -97,6 +97,7 @@ type PublicVehicleRow = {
   description: string | null;
   yard_name: string;
   yard_location: string;
+  yard_slug: string;
   whatsapp_phone: string;
 };
 
@@ -137,6 +138,7 @@ function mapPublicVehicle(row: PublicVehicleRow): PublicVehicle {
     yard: {
       name: row.yard_name,
       location: row.yard_location,
+      slug: row.yard_slug,
       whatsapp_phone: row.whatsapp_phone,
     },
   };
@@ -163,6 +165,7 @@ const publicVehicleSelect = `
     c.description,
     d.showroom_name as yard_name,
     d.location as yard_location,
+    d.slug as yard_slug,
     d.whatsapp_phone
   from cars c
   join dealers d on d.id = c.dealer_id
@@ -172,23 +175,74 @@ const publicVehicleSelect = `
     and d.subscription_expires_at > now()
 `;
 
-export async function listRailwayPublicVehicles(): Promise<PublicVehicle[]> {
+export async function listRailwayPublicYards(): Promise<PublicYard[]> {
   return withRailwayTransaction({}, async (transaction) => {
+    const yards = await transaction<PublicYard[]>`
+      select d.slug, d.showroom_name as name, d.location,
+        count(c.id)::integer as vehicle_count
+      from dealers d
+      left join cars c
+        on c.dealer_id = d.id
+        and c.is_published
+        and not exists (
+          select 1 from vehicle_sales vs where vs.car_id = c.id
+        )
+      where d.is_active
+        and d.subscription_status = 'ACTIVE'
+        and d.subscription_expires_at > now()
+      group by d.id
+      order by d.showroom_name
+    `;
+    return [...yards];
+  });
+}
+
+export async function getRailwayPublicYardMarketplace(slug: string): Promise<{
+  yard: PublicYard | null;
+  vehicles: PublicVehicle[];
+}> {
+  return withRailwayTransaction({}, async (transaction) => {
+    const [yard] = await transaction<PublicYard[]>`
+      select d.slug, d.showroom_name as name, d.location,
+        count(c.id)::integer as vehicle_count
+      from dealers d
+      left join cars c
+        on c.dealer_id = d.id
+        and c.is_published
+        and not exists (
+          select 1 from vehicle_sales vs where vs.car_id = c.id
+        )
+      where d.slug = ${slug}
+        and d.is_active
+        and d.subscription_status = 'ACTIVE'
+        and d.subscription_expires_at > now()
+      group by d.id
+      limit 1
+    `;
+    if (!yard) return { yard: null, vehicles: [] };
+
     const rows = await transaction.unsafe<PublicVehicleRow[]>(
-      `${publicVehicleSelect} order by c.created_at desc`,
+      `${publicVehicleSelect} and d.slug = $1 order by c.created_at desc`,
+      [slug],
     );
-    return rows.map(mapPublicVehicle);
+    return { yard, vehicles: rows.map(mapPublicVehicle) };
   });
 }
 
 export async function getRailwayPublicVehicle(
   id: string,
+  yardSlug?: string,
 ): Promise<PublicVehicle | null> {
   return withRailwayTransaction({}, async (transaction) => {
-    const rows = await transaction.unsafe<PublicVehicleRow[]>(
-      `${publicVehicleSelect} and c.id = $1 limit 1`,
-      [id],
-    );
+    const rows = yardSlug
+      ? await transaction.unsafe<PublicVehicleRow[]>(
+          `${publicVehicleSelect} and c.id = $1 and d.slug = $2 limit 1`,
+          [id, yardSlug],
+        )
+      : await transaction.unsafe<PublicVehicleRow[]>(
+          `${publicVehicleSelect} and c.id = $1 limit 1`,
+          [id],
+        );
     return rows[0] ? mapPublicVehicle(rows[0]) : null;
   });
 }

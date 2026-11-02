@@ -6,7 +6,7 @@ import postgres from "postgres";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationName = process.argv[2];
 
-if (!/^000[1-4]_[a-z0-9_]+\.sql$/.test(migrationName ?? "")) {
+if (!/^\d{4}_[a-z0-9_]+\.sql$/.test(migrationName ?? "")) {
   console.error(
     "Usage: npm run db:migrate -- <migration-file> (for example, 0002_link_authenticated_workers.sql)",
   );

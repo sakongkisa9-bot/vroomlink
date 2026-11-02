@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { PortalShell, MetricCard } from "@/components/PortalShell";
 import {
-  createDealerBroker,
+  createDealerWorker,
   createCarWithImportCosts,
   deactivateDealerWorker,
   getDealerDashboard,
@@ -19,6 +19,7 @@ import {
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
 import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
+import { YardQrCodeButton } from "@/components/YardQrCodeButton";
 
 const pipeline = [
   { status: "PURCHASED", label: "Purchased (Japan)" },
@@ -29,16 +30,20 @@ const pipeline = [
 
 export const Route = createFileRoute("/dealer")({
   head: () => ({ meta: [{ title: "Car Dealer Console | VroomLink" }] }),
-  component: DealerConsole,
+  component: () => <DealerWorkspace expectedRole="OWNER" />,
 });
 
-function DealerConsole() {
+export function DealerWorkspace({
+  expectedRole,
+}: {
+  expectedRole: "OWNER" | "SALESPERSON";
+}) {
   const [currentRole, setCurrentRole] = useState<
-    "OWNER" | "YARD_MANAGER" | "SALESPERSON" | null
+    "OWNER" | "YARD_MANAGER" | "SALESPERSON" | "BROKER" | null
   >(null);
-  const [section, setSection] = useState<"overview" | "staff" | "sales">(
-    "overview",
-  );
+  const [section, setSection] = useState<
+    "overview" | "inventory" | "staff" | "sales"
+  >(expectedRole === "OWNER" ? "overview" : "inventory");
   const [costingOpen, setCostingOpen] = useState(false);
   const [liveDashboard, setLiveDashboard] = useState<Awaited<
     ReturnType<typeof getDealerDashboard>
@@ -46,16 +51,26 @@ function DealerConsole() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const loadDashboard = useServerFn(getDealerDashboard);
   const deactivateWorker = useServerFn(deactivateDealerWorker);
-  const addBroker = useServerFn(createDealerBroker);
-  const [creatingBroker, setCreatingBroker] = useState(false);
+  const addWorker = useServerFn(createDealerWorker);
+  const [creatingWorker, setCreatingWorker] = useState(false);
 
   async function loadOwnerDashboard() {
     setLoadingDashboard(true);
     try {
       const headers = await getSupabaseAuthHeaders();
-      const dashboard = await loadDashboard({ data: {}, headers });
+      const dashboard = await loadDashboard({
+        data: { workspaceRole: expectedRole },
+        headers,
+      });
       setLiveDashboard(dashboard);
       setCurrentRole(dashboard.currentRole);
+      if (dashboard.currentRole !== expectedRole) {
+        setLiveDashboard(null);
+        setCurrentRole(null);
+        throw new Error(
+          `Sign in with an active ${expectedRole === "OWNER" ? "yard owner" : "salesperson"} account to open this page.`,
+        );
+      }
       toast.success("Live dealer records loaded.");
     } catch (error) {
       setLiveDashboard(null);
@@ -71,23 +86,30 @@ function DealerConsole() {
     }
   }
 
-  async function createLiveBroker(event: FormEvent<HTMLFormElement>) {
+  async function createLiveWorker(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
     if (!liveDashboard || currentRole !== "OWNER") {
-      toast.error("Load the yard as an owner before adding a broker.");
+      toast.error("Load the yard as an owner before adding staff.");
       return;
     }
 
     const form = new FormData(formElement);
-    setCreatingBroker(true);
+    setCreatingWorker(true);
     try {
       const headers = await getSupabaseAuthHeaders();
-      const result = await addBroker({
+      const name = String(form.get("workerName")).trim();
+      const email = String(form.get("workerEmail")).trim();
+      const workspaceRole = String(form.get("workspaceRole"));
+      if (workspaceRole !== "BROKER" && workspaceRole !== "SALESPERSON") {
+        throw new Error("Choose either the broker or salesperson role.");
+      }
+      const result = await addWorker({
         data: {
           dealerId: liveDashboard.dealerId,
-          fullName: String(form.get("brokerName")),
-          email: String(form.get("brokerEmail")),
+          fullName: name,
+          email,
+          workspaceRole,
         },
         headers,
       });
@@ -99,9 +121,9 @@ function DealerConsole() {
                 ...current.staff,
                 {
                   id: result.workerId,
-                  full_name: String(form.get("brokerName")).trim(),
-                  email: String(form.get("brokerEmail")).trim(),
-                  workspace_role: "SALESPERSON",
+                  full_name: name,
+                  email,
+                  workspace_role: workspaceRole,
                   is_active: true,
                 },
               ],
@@ -110,15 +132,15 @@ function DealerConsole() {
       );
       formElement.reset();
       toast.success(
-        "Broker added. They can sign in using this email to access the broker portal.",
+        `${workspaceRole === "BROKER" ? "Broker" : "Salesperson"} added. They can sign in using this email.`,
       );
     } catch (error) {
-      console.error("Could not add dealer broker", error);
+      console.error("Could not add dealer staff", error);
       toast.error(
-        error instanceof Error ? error.message : "Could not add broker.",
+        error instanceof Error ? error.message : "Could not add staff.",
       );
     } finally {
-      setCreatingBroker(false);
+      setCreatingWorker(false);
     }
   }
 
@@ -161,14 +183,20 @@ function DealerConsole() {
 
   return (
     <PortalShell
-      title="Car Dealer Console"
-      description="Fleet operations, costing, staff, and yard audit overview."
+      title={
+        expectedRole === "OWNER" ? "Owner Workspace" : "Salesperson Workspace"
+      }
+      description={
+        expectedRole === "OWNER"
+          ? "Manage staff, yard inventory, sales, and all yard activity."
+          : "Add and update vehicle listings, record sales, and share this yard's marketplace."
+      }
     >
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-4">
         <div>
           <p className="text-sm font-semibold">
             {currentRole
-              ? `Authenticated workspace · ${currentRole.replaceAll("_", " ")}`
+              ? `Authenticated workspace · ${expectedRole}`
               : "Load your assigned yard workspace"}
           </p>
           <p className="text-xs text-muted-foreground">
@@ -187,126 +215,41 @@ function DealerConsole() {
               ? "Refresh workspace"
               : "Load workspace"}
         </button>
+        {expectedRole === "SALESPERSON" && liveDashboard && (
+          <YardQrCodeButton
+            yardName={liveDashboard.yardName}
+            slug={liveDashboard.yardSlug}
+          />
+        )}
       </div>
 
-      {currentRole === "YARD_MANAGER" && liveDashboard ? (
+      {currentRole === expectedRole && liveDashboard ? (
         <section>
           <div className="mb-5 flex gap-2 border-b">
-            <button
-              type="button"
-              onClick={() => setSection("overview")}
-              className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "overview" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
-            >
-              Vehicle pipeline
-            </button>
-            <button
-              type="button"
-              onClick={() => setSection("sales")}
-              className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "sales" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
-            >
-              Completed sales
-            </button>
-          </div>
-          {section === "sales" ? (
-            <SalesManagement
-              dashboard={liveDashboard}
-              onSaved={() => void loadOwnerDashboard()}
-            />
-          ) : (
-            <>
-              <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h2 className="text-xl font-semibold">
-                    Vehicle import pipeline
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    Your yard fleet grouped by its current import status.
-                  </p>
-                </div>
+            {expectedRole === "OWNER" && (
+              <>
                 <button
                   type="button"
-                  onClick={() => setCostingOpen(true)}
-                  className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
+                  onClick={() => setSection("overview")}
+                  className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "overview" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
                 >
-                  Vehicle Sourcing &amp; Costing
+                  Owner Overview
                 </button>
-              </div>
-              <div className="grid gap-4 xl:grid-cols-4">
-                {pipeline.map((column) => {
-                  const columnVehicles = liveDashboard.cars.filter(
-                    (vehicle) => vehicle.status_badge === column.status,
-                  );
-                  return (
-                    <section
-                      key={column.status}
-                      className="min-w-0 rounded-2xl border bg-muted/50 p-3"
-                    >
-                      <div className="mb-3 flex items-center justify-between gap-2 px-1">
-                        <h3 className="text-sm font-semibold">
-                          {column.label}
-                        </h3>
-                        <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted-foreground">
-                          {columnVehicles.length}
-                        </span>
-                      </div>
-                      <div className="space-y-3">
-                        {columnVehicles.map((vehicle) => (
-                          <article
-                            key={vehicle.id}
-                            className="rounded-xl border bg-card p-3 shadow-sm"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <h4 className="text-sm font-semibold">
-                                {vehicle.year} {vehicle.brand} {vehicle.model}
-                              </h4>
-                              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                                {column.label}
-                              </span>
-                            </div>
-                            <p className="mt-2 text-sm font-bold text-primary">
-                              {formatKsh(Number(vehicle.selling_price))}
-                            </p>
-                            {vehicle.chassis_number && (
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                Chassis: {vehicle.chassis_number}
-                              </p>
-                            )}
-                          </article>
-                        ))}
-                        {columnVehicles.length === 0 && (
-                          <div className="rounded-xl border border-dashed bg-card/60 px-3 py-6 text-center text-xs text-muted-foreground">
-                            No vehicles at this stage
-                          </div>
-                        )}
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
-              <CostingDialog
-                open={costingOpen}
-                onOpenChange={setCostingOpen}
-                onSaved={() => void loadOwnerDashboard()}
-              />
-            </>
-          )}
-        </section>
-      ) : currentRole === "OWNER" && liveDashboard ? (
-        <section>
-          <div className="mb-5 flex gap-2 border-b">
+                <button
+                  type="button"
+                  onClick={() => setSection("staff")}
+                  className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "staff" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+                >
+                  Manage Staff
+                </button>
+              </>
+            )}
             <button
               type="button"
-              onClick={() => setSection("overview")}
-              className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "overview" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
+              onClick={() => setSection("inventory")}
+              className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "inventory" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
             >
-              Owner Overview
-            </button>
-            <button
-              type="button"
-              onClick={() => setSection("staff")}
-              className={`border-b-2 px-3 py-2 text-sm font-semibold ${section === "staff" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}
-            >
-              Manage Staff
+              Vehicle Inventory
             </button>
             <button
               type="button"
@@ -316,22 +259,27 @@ function DealerConsole() {
               Completed Sales
             </button>
           </div>
-          {section === "overview" ? (
+          {expectedRole === "OWNER" && section === "overview" ? (
             <OwnerOverview
               liveCars={liveDashboard?.cars ?? null}
               liveLogs={liveDashboard?.logs ?? null}
               loading={loadingDashboard}
               onLoadLiveData={() => void loadOwnerDashboard()}
             />
-          ) : section === "staff" ? (
+          ) : expectedRole === "OWNER" && section === "staff" ? (
             <StaffTable
               liveStaff={liveDashboard?.staff ?? null}
               loading={loadingDashboard}
-              canCreateBroker={currentRole === "OWNER"}
-              creatingBroker={creatingBroker}
-              onCreateBroker={(event) => void createLiveBroker(event)}
+              canManageStaff={currentRole === "OWNER"}
+              creatingWorker={creatingWorker}
+              onCreateWorker={(event) => void createLiveWorker(event)}
               onLoadLiveData={() => void loadOwnerDashboard()}
               onDeactivateLiveWorker={(id) => void deactivateLiveWorker(id)}
+            />
+          ) : section === "inventory" ? (
+            <InventoryManagement
+              dashboard={liveDashboard}
+              onAddVehicle={() => setCostingOpen(true)}
             />
           ) : (
             <SalesManagement
@@ -339,18 +287,100 @@ function DealerConsole() {
               onSaved={() => void loadOwnerDashboard()}
             />
           )}
+          <CostingDialog
+            open={costingOpen}
+            onOpenChange={setCostingOpen}
+            onSaved={() => void loadOwnerDashboard()}
+          />
         </section>
       ) : (
         <section className="rounded-2xl border border-dashed bg-card p-8 text-center">
-          <h2 className="text-lg font-semibold">Yard access required</h2>
+          <h2 className="text-lg font-semibold">
+            {expectedRole === "OWNER"
+              ? "Owner access required"
+              : "Salesperson access required"}
+          </h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sign in with an email matching an active yard worker record, then
-            load your workspace. Protected operations verify your role on the
-            server.
+            Sign in with an email matching an active{" "}
+            {expectedRole === "OWNER" ? "owner" : "salesperson"} account for a
+            car yard, then load this workspace.
           </p>
         </section>
       )}
     </PortalShell>
+  );
+}
+
+function InventoryManagement({
+  dashboard,
+  onAddVehicle,
+}: {
+  dashboard: Awaited<ReturnType<typeof getDealerDashboard>>;
+  onAddVehicle: () => void;
+}) {
+  return (
+    <section>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold">Vehicle inventory</h2>
+          <p className="text-sm text-muted-foreground">
+            Add vehicles and update their prices and import details.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onAddVehicle}
+          className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
+        >
+          Add vehicle
+        </button>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-4">
+        {pipeline.map((column) => {
+          const vehicles = dashboard.cars.filter(
+            (vehicle) => vehicle.status_badge === column.status,
+          );
+          return (
+            <section
+              key={column.status}
+              className="min-w-0 rounded-2xl border bg-muted/50 p-3"
+            >
+              <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                <h3 className="text-sm font-semibold">{column.label}</h3>
+                <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted-foreground">
+                  {vehicles.length}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {vehicles.map((vehicle) => (
+                  <article
+                    key={vehicle.id}
+                    className="rounded-xl border bg-card p-3 shadow-sm"
+                  >
+                    <h4 className="text-sm font-semibold">
+                      {vehicle.year} {vehicle.brand} {vehicle.model}
+                    </h4>
+                    <p className="mt-2 text-sm font-bold text-primary">
+                      {formatKsh(Number(vehicle.selling_price))}
+                    </p>
+                    {vehicle.chassis_number && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Chassis: {vehicle.chassis_number}
+                      </p>
+                    )}
+                  </article>
+                ))}
+                {vehicles.length === 0 && (
+                  <div className="rounded-xl border border-dashed bg-card/60 px-3 py-6 text-center text-xs text-muted-foreground">
+                    No vehicles at this stage
+                  </div>
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -364,8 +394,8 @@ function SalesManagement({
   const saveSale = useServerFn(recordCompletedVehicleSale);
   const [busy, setBusy] = useState(false);
   const availableCars = dashboard.cars;
-  const activeSalespeople = dashboard.staff.filter(
-    (worker) => worker.workspace_role === "SALESPERSON" && worker.is_active,
+  const activeBrokers = dashboard.staff.filter(
+    (worker) => worker.workspace_role === "BROKER" && worker.is_active,
   );
 
   async function submitSale(event: FormEvent<HTMLFormElement>) {
@@ -434,7 +464,7 @@ function SalesManagement({
               className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
             >
               <option value="">No broker attribution</option>
-              {activeSalespeople.map((worker) => (
+              {activeBrokers.map((worker) => (
                 <option key={worker.id} value={worker.id}>
                   {worker.full_name}
                 </option>
@@ -659,17 +689,17 @@ function AuditTable({
 function StaffTable({
   liveStaff,
   loading,
-  canCreateBroker,
-  creatingBroker,
-  onCreateBroker,
+  canManageStaff,
+  creatingWorker,
+  onCreateWorker,
   onLoadLiveData,
   onDeactivateLiveWorker,
 }: {
   liveStaff: Awaited<ReturnType<typeof getDealerDashboard>>["staff"] | null;
   loading: boolean;
-  canCreateBroker: boolean;
-  creatingBroker: boolean;
-  onCreateBroker: (event: FormEvent<HTMLFormElement>) => void;
+  canManageStaff: boolean;
+  creatingWorker: boolean;
+  onCreateWorker: (event: FormEvent<HTMLFormElement>) => void;
   onLoadLiveData: () => void;
   onDeactivateLiveWorker: (id: string) => void;
 }) {
@@ -689,7 +719,7 @@ function StaffTable({
         <h2 className="text-xl font-semibold">Manage Staff</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {liveStaff
-            ? "Live staff records. Adding brokers and deactivating workers requires an authenticated yard owner."
+            ? "The owner controls staff access and creates broker and salesperson accounts."
             : "Load live staff records to manage this yard's worker access."}
         </p>
       </div>
@@ -705,15 +735,15 @@ function StaffTable({
             ? "Refresh live staff"
             : "Load live staff"}
       </button>
-      {canCreateBroker && liveStaff && (
+      {canManageStaff && liveStaff && (
         <form
-          onSubmit={onCreateBroker}
-          className="mb-5 grid gap-3 rounded-xl border bg-muted/30 p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+          onSubmit={onCreateWorker}
+          className="mb-5 grid gap-3 rounded-xl border bg-muted/30 p-4 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end"
         >
           <label className="space-y-1.5 text-sm font-medium">
-            Broker full name
+            Staff full name
             <input
-              name="brokerName"
+              name="workerName"
               required
               minLength={2}
               maxLength={160}
@@ -721,21 +751,32 @@ function StaffTable({
             />
           </label>
           <label className="space-y-1.5 text-sm font-medium">
-            Broker sign-in email
+            Staff sign-in email
             <input
-              name="brokerEmail"
+              name="workerEmail"
               type="email"
               required
               maxLength={254}
               className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
             />
           </label>
+          <label className="space-y-1.5 text-sm font-medium">
+            Role
+            <select
+              name="workspaceRole"
+              required
+              className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+            >
+              <option value="SALESPERSON">Salesperson</option>
+              <option value="BROKER">Broker</option>
+            </select>
+          </label>
           <button
             type="submit"
-            disabled={creatingBroker}
+            disabled={creatingWorker}
             className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50"
           >
-            {creatingBroker ? "Adding…" : "Add broker"}
+            {creatingWorker ? "Adding…" : "Add staff account"}
           </button>
         </form>
       )}
@@ -759,9 +800,13 @@ function StaffTable({
                   <td className="px-3 py-4 font-medium">{staff.name}</td>
                   <td className="px-3 py-4">{staff.email}</td>
                   <td className="px-3 py-4">
-                    {staff.role === "SALESPERSON"
-                      ? "Broker"
-                      : staff.role.replaceAll("_", " ")}
+                    {staff.role === "YARD_MANAGER"
+                      ? "Yard manager"
+                      : staff.role === "SALESPERSON"
+                        ? "Salesperson"
+                        : staff.role === "BROKER"
+                          ? "Broker"
+                          : "Owner"}
                   </td>
                   <td className="px-3 py-4">
                     <span

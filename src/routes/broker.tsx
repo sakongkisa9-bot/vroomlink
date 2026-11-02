@@ -43,7 +43,7 @@ function BrokerDashboard() {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Could not load broker records. Sign in as an active salesperson.",
+          : "Could not load broker records. Sign in as an active broker.",
       );
     } finally {
       setLoading(false);
@@ -53,6 +53,7 @@ function BrokerDashboard() {
   async function copyReferralLink(vehicleId: string) {
     if (!dashboard) return;
     const url = new URL(`/cars/${vehicleId}`, window.location.origin);
+    url.searchParams.set("yard", dashboard.yardSlug);
     url.searchParams.set("ref", dashboard.brokerWorkerId);
     try {
       await navigator.clipboard.writeText(url.toString());
@@ -104,7 +105,7 @@ function BrokerDashboard() {
     >
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4">
         <p className="text-sm text-muted-foreground">
-          Sign in with an active salesperson worker account to load your yard
+          Sign in with an active broker worker account to load your yard
           records.
         </p>
         <button
