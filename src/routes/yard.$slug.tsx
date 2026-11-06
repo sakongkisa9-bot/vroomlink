@@ -89,12 +89,6 @@ function YardMarketplace() {
     <div className="min-h-screen">
       <SiteHeader q={search.q} onSearch={(q) => set({ q: q || undefined })} />
       <div className="mx-auto max-w-7xl px-4 py-8">
-        <Link
-          to="/"
-          className="mb-5 inline-flex text-sm font-medium text-primary hover:underline"
-        >
-          ← All car yards
-        </Link>
         <header className="mb-7 rounded-2xl border bg-card p-6">
           <p className="text-sm font-semibold uppercase tracking-wider text-primary">
             Car yard marketplace

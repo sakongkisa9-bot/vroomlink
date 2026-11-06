@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, Search } from "lucide-react";
+import { InstallAppButton } from "@/components/InstallAppButton";
 import { PortalAuthControl } from "@/components/PortalAuthControl";
 import {
   DropdownMenu,
@@ -19,7 +20,7 @@ export function SiteHeader({
 }) {
   return (
     <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4">
+      <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center gap-2 px-4 py-2 sm:h-16 sm:flex-nowrap sm:gap-4 sm:py-0">
         <Link
           to="/"
           search={{}}
@@ -28,7 +29,7 @@ export function SiteHeader({
           Vroom<span className="text-primary">Link</span>
         </Link>
         {onSearch && (
-          <label className="relative ml-auto flex w-full max-w-md items-center">
+          <label className="relative order-last flex w-full basis-full items-center sm:order-none sm:ml-auto sm:w-full sm:max-w-md">
             <Search className="pointer-events-none absolute left-3 h-4 w-4 text-muted-foreground" />
             <input
               defaultValue={q}
@@ -38,29 +39,35 @@ export function SiteHeader({
             />
           </label>
         )}
-        <DropdownMenu>
-          <DropdownMenuTrigger className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border bg-card px-4 text-sm font-semibold shadow-sm outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
-            Portal Access
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>VroomLink Portals</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link to="/broker">Broker Dashboard</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/salesperson">Salesperson Workspace</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/dealer">Car Dealer Console</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/developer">Developer Admin Panel</Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <PortalAuthControl />
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-4">
+          <InstallAppButton />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="Portal Access"
+              className="inline-flex h-10 shrink-0 items-center gap-2 rounded-full border bg-card px-3 text-sm font-semibold shadow-sm outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:px-4"
+            >
+              <span className="hidden sm:inline">Portal Access</span>
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>VroomLink Portals</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/broker">Broker Dashboard</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/salesperson">Salesperson Workspace</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/dealer">Car Dealer Console</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/developer">Developer Admin Panel</Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <PortalAuthControl />
+        </div>
       </div>
     </header>
   );
