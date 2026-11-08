@@ -18,6 +18,7 @@ import {
   deactivateDealerWorker,
   getDealerDashboard,
   recordCompletedVehicleSale,
+  updateDealerCar,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
 import { supabase } from "@/integrations/client";
@@ -289,6 +290,7 @@ export function DealerWorkspace({
             <InventoryManagement
               dashboard={liveDashboard}
               onAddVehicle={() => setCostingOpen(true)}
+              onSaved={() => void loadOwnerDashboard()}
             />
           ) : (
             <SalesManagement
@@ -323,10 +325,16 @@ export function DealerWorkspace({
 function InventoryManagement({
   dashboard,
   onAddVehicle,
+  onSaved,
 }: {
   dashboard: Awaited<ReturnType<typeof getDealerDashboard>>;
   onAddVehicle: () => void;
+  onSaved: () => void;
 }) {
+  const [editingVehicle, setEditingVehicle] = useState<
+    (typeof dashboard.cars)[number] | null
+  >(null);
+
   return (
     <section>
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -366,17 +374,28 @@ function InventoryManagement({
                     key={vehicle.id}
                     className="rounded-xl border bg-card p-3 shadow-sm"
                   >
-                    <h4 className="text-sm font-semibold">
-                      {vehicle.year} {vehicle.brand} {vehicle.model}
-                    </h4>
-                    <p className="mt-2 text-sm font-bold text-primary">
-                      {formatKsh(Number(vehicle.selling_price))}
-                    </p>
-                    {vehicle.chassis_number && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Chassis: {vehicle.chassis_number}
-                      </p>
-                    )}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold">
+                          {vehicle.year} {vehicle.brand} {vehicle.model}
+                        </h4>
+                        <p className="mt-2 text-sm font-bold text-primary">
+                          {formatKsh(Number(vehicle.selling_price))}
+                        </p>
+                        {vehicle.chassis_number && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Chassis: {vehicle.chassis_number}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEditingVehicle(vehicle)}
+                        className="shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold hover:bg-muted"
+                      >
+                        Edit
+                      </button>
+                    </div>
                   </article>
                 ))}
                 {vehicles.length === 0 && (
@@ -389,7 +408,155 @@ function InventoryManagement({
           );
         })}
       </div>
+      {editingVehicle && (
+        <EditVehicleDialog
+          key={editingVehicle.id}
+          vehicle={editingVehicle}
+          onOpenChange={(open) => {
+            if (!open) setEditingVehicle(null);
+          }}
+          onSaved={() => {
+            setEditingVehicle(null);
+            onSaved();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function EditVehicleDialog({
+  vehicle,
+  onOpenChange,
+  onSaved,
+}: {
+  vehicle: Awaited<ReturnType<typeof getDealerDashboard>>["cars"][number];
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const saveCar = useServerFn(updateDealerCar);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      const headers = await getSupabaseAuthHeaders();
+      const statusBadge = pipeline.find(
+        (stage) => stage.status === form.get("statusBadge"),
+      )?.status;
+      if (!statusBadge) throw new Error("Choose a valid inventory status.");
+      await saveCar({
+        data: {
+          carId: vehicle.id,
+          brand: String(form.get("brand")),
+          model: String(form.get("model")),
+          year: Number(form.get("year")),
+          sellingPrice: Number(form.get("sellingPrice")),
+          chassisNumber: String(form.get("chassisNumber") || "") || null,
+          statusBadge,
+        },
+        headers,
+      });
+      toast.success("Vehicle details updated.");
+      onSaved();
+    } catch (error) {
+      console.error("Could not update vehicle details", error);
+      toast.error(
+        error instanceof Error ? error.message : "Could not update vehicle.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Edit vehicle details</DialogTitle>
+          <DialogDescription>
+            Update the listing details for {vehicle.year} {vehicle.brand}{" "}
+            {vehicle.model}.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5 text-sm font-medium">
+              Brand
+              <input
+                name="brand"
+                defaultValue={vehicle.brand}
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Model
+              <input
+                name="model"
+                defaultValue={vehicle.model}
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Year
+              <input
+                name="year"
+                type="number"
+                min="1900"
+                max="2100"
+                defaultValue={vehicle.year}
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Selling price (KSh)
+              <input
+                name="sellingPrice"
+                type="number"
+                min="1"
+                defaultValue={vehicle.selling_price}
+                required
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
+              Chassis number
+              <input
+                name="chassisNumber"
+                defaultValue={vehicle.chassis_number ?? ""}
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
+              Inventory status
+              <select
+                name="statusBadge"
+                defaultValue={vehicle.status_badge}
+                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+              >
+                {pipeline.map((stage) => (
+                  <option key={stage.status} value={stage.status}>
+                    {stage.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            type="submit"
+            disabled={busy}
+            className="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save changes"}
+          </button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

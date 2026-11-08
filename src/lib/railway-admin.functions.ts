@@ -52,6 +52,15 @@ const createCarSchema = z.object({
   brokerWholesalePrice: money,
   brokerCommissionRatePercent: z.number().min(0).max(100),
 });
+const updateCarSchema = z.object({
+  carId: uuid,
+  brand: z.string().trim().min(1).max(80),
+  model: z.string().trim().min(1).max(120),
+  chassisNumber: z.string().trim().min(1).max(100).nullable(),
+  sellingPrice: money.positive(),
+  statusBadge: z.enum(["PURCHASED", "ON_OCEAN", "PORT_CLEARING", "IN_YARD"]),
+  year: z.number().int().min(1900).max(2100),
+});
 const createVehicleImageUploadUrlsSchema = z.object({
   files: z
     .array(
@@ -283,6 +292,51 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
         totalTrueCostKsh,
         createdBy: worker.email,
       };
+    });
+  });
+
+export const updateDealerCar = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof updateCarSchema>) =>
+    updateCarSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const actor = principal(context);
+    return withRailwayTransaction(actor, async (transaction) => {
+      const dealerId = await resolveCurrentDealerId(
+        transaction,
+        actor.userId,
+        undefined,
+        ["OWNER", "YARD_MANAGER", "SALESPERSON"],
+      );
+      await assertDealerWorker(transaction, dealerId, actor.userId, [
+        "OWNER",
+        "YARD_MANAGER",
+        "SALESPERSON",
+      ]);
+
+      const [car] = await transaction<{ id: string }[]>`
+        update cars
+        set brand = ${data.brand},
+          model = ${data.model},
+          chassis_number = ${data.chassisNumber},
+          selling_price = ${data.sellingPrice},
+          status_badge = ${data.statusBadge},
+          year = ${data.year},
+          updated_at = now()
+        where id = ${data.carId}
+          and dealer_id = ${dealerId}
+          and not exists (
+            select 1 from vehicle_sales vs where vs.car_id = cars.id
+          )
+        returning id
+      `;
+      if (!car)
+        throw new Error(
+          "Vehicle not found in your yard or it has already been sold.",
+        );
+
+      return { carId: car.id };
     });
   });
 
