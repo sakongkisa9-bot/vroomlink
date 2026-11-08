@@ -10,6 +10,21 @@ import { withRailwayTransaction } from "./railway.server";
 const uuid = z.string().uuid();
 const money = z.number().int().safe().nonnegative();
 type WorkspaceRole = "OWNER" | "YARD_MANAGER" | "SALESPERSON" | "BROKER";
+const VEHICLE_IMAGES_BUCKET = "vehicle-images";
+const vehicleImageContentType = z.enum([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+const vehicleImageMaxSizeBytes = 10 * 1024 * 1024;
+const vehicleImageExtensions: Record<
+  z.infer<typeof vehicleImageContentType>,
+  string
+> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
 
 const createCarSchema = z.object({
   dealerId: uuid.optional(),
@@ -37,7 +52,20 @@ const createCarSchema = z.object({
   brokerWholesalePrice: money,
   brokerCommissionRatePercent: z.number().min(0).max(100),
 });
-
+const createVehicleImageUploadUrlsSchema = z.object({
+  files: z
+    .array(
+      z.object({
+        contentType: vehicleImageContentType,
+        size: z.number().int().positive().max(vehicleImageMaxSizeBytes),
+      }),
+    )
+    .min(1)
+    .max(12),
+});
+const deleteVehicleImageUploadsSchema = z.object({
+  paths: z.array(z.string().trim().min(1).max(200)).max(12),
+});
 const submitBrokerLeadSchema = z.object({
   carId: uuid,
   customerName: z.string().trim().min(1).max(160),
@@ -256,6 +284,127 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
         createdBy: worker.email,
       };
     });
+  });
+
+export const createVehicleImageUploadUrls = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof createVehicleImageUploadUrlsSchema>) =>
+    createVehicleImageUploadUrlsSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const actor = principal(context);
+    const dealerId = await withRailwayTransaction(
+      actor,
+      async (transaction) => {
+        const currentDealerId = await resolveCurrentDealerId(
+          transaction,
+          actor.userId,
+          undefined,
+          ["OWNER", "YARD_MANAGER", "SALESPERSON"],
+        );
+        await assertDealerWorker(transaction, currentDealerId, actor.userId, [
+          "OWNER",
+          "YARD_MANAGER",
+          "SALESPERSON",
+        ]);
+        return currentDealerId;
+      },
+    );
+
+    const { supabaseAdmin } = await import("@/integrations/client.server");
+    const { data: buckets, error: listError } =
+      await supabaseAdmin.storage.listBuckets();
+    if (listError)
+      throw new Error(
+        `Could not check vehicle image storage: ${listError.message}`,
+      );
+
+    const bucket = buckets.find(
+      (candidate) => candidate.name === VEHICLE_IMAGES_BUCKET,
+    );
+    if (!bucket) {
+      const { error: createError } = await supabaseAdmin.storage.createBucket(
+        VEHICLE_IMAGES_BUCKET,
+        {
+          public: true,
+          fileSizeLimit: "10MB",
+          allowedMimeTypes: vehicleImageContentType.options,
+        },
+      );
+      if (createError)
+        throw new Error(
+          `Could not initialize vehicle image storage: ${createError.message}`,
+        );
+    } else if (!bucket.public) {
+      throw new Error(
+        "The vehicle image storage bucket must be public to display car photos.",
+      );
+    }
+
+    const uploads = await Promise.all(
+      data.files.map(async ({ contentType }) => {
+        const path = `${dealerId}/${crypto.randomUUID()}.${vehicleImageExtensions[contentType]}`;
+        const { data: signedUpload, error } = await supabaseAdmin.storage
+          .from(VEHICLE_IMAGES_BUCKET)
+          .createSignedUploadUrl(path);
+        if (error)
+          throw new Error(`Could not prepare image upload: ${error.message}`);
+        return {
+          path: signedUpload.path,
+          token: signedUpload.token,
+          publicUrl: supabaseAdmin.storage
+            .from(VEHICLE_IMAGES_BUCKET)
+            .getPublicUrl(signedUpload.path).data.publicUrl,
+        };
+      }),
+    );
+
+    return { uploads };
+  });
+
+export const deleteVehicleImageUploads = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof deleteVehicleImageUploadsSchema>) =>
+    deleteVehicleImageUploadsSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    if (data.paths.length === 0) return { deleted: 0 };
+
+    const actor = principal(context);
+    const dealerId = await withRailwayTransaction(
+      actor,
+      async (transaction) => {
+        const currentDealerId = await resolveCurrentDealerId(
+          transaction,
+          actor.userId,
+          undefined,
+          ["OWNER", "YARD_MANAGER", "SALESPERSON"],
+        );
+        await assertDealerWorker(transaction, currentDealerId, actor.userId, [
+          "OWNER",
+          "YARD_MANAGER",
+          "SALESPERSON",
+        ]);
+        return currentDealerId;
+      },
+    );
+
+    const ownedImagePath = new RegExp(
+      `^${dealerId}/[0-9a-f-]{36}\\.(?:jpg|png|webp)$`,
+    );
+    if (data.paths.some((path) => !ownedImagePath.test(path)))
+      throw new Error("Cannot remove vehicle images outside your yard.");
+
+    const { supabaseAdmin } = await import("@/integrations/client.server");
+    const { error } = await supabaseAdmin.storage
+      .from(VEHICLE_IMAGES_BUCKET)
+      .remove(data.paths);
+    if (error)
+      throw new Error(
+        `Could not clean up vehicle image uploads: ${error.message}`,
+      );
+
+    return { deleted: data.paths.length };
   });
 
 export const getBrokerDashboard = createServerFn({ method: "GET" })

@@ -13,11 +13,14 @@ import { PortalShell, MetricCard } from "@/components/PortalShell";
 import {
   createDealerWorker,
   createCarWithImportCosts,
+  createVehicleImageUploadUrls,
+  deleteVehicleImageUploads,
   deactivateDealerWorker,
   getDealerDashboard,
   recordCompletedVehicleSale,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
+import { supabase } from "@/integrations/client";
 import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import { YardQrCodeButton } from "@/components/YardQrCodeButton";
 
@@ -27,6 +30,12 @@ const pipeline = [
   { status: "PORT_CLEARING", label: "Port Clearing (Mombasa)" },
   { status: "IN_YARD", label: "In Yard" },
 ] as const;
+
+function isVehicleImageContentType(
+  type: string,
+): type is "image/jpeg" | "image/png" | "image/webp" {
+  return type === "image/jpeg" || type === "image/png" || type === "image/webp";
+}
 
 export const Route = createFileRoute("/dealer")({
   head: () => ({ meta: [{ title: "Car Dealer Console | VroomLink" }] }),
@@ -865,7 +874,10 @@ function CostingDialog({
   onSaved: () => void;
 }) {
   const saveCar = useServerFn(createCarWithImportCosts);
+  const createImageUploads = useServerFn(createVehicleImageUploadUrls);
+  const deleteImageUploads = useServerFn(deleteVehicleImageUploads);
   const [busy, setBusy] = useState(false);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [costs, setCosts] = useState({
     cif: 0,
     duty: 0,
@@ -884,10 +896,47 @@ function CostingDialog({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     setBusy(true);
+    let uploadPaths: string[] = [];
     try {
       const headers = await getSupabaseAuthHeaders();
+      let images: string[] = [];
+      if (imageFiles.length > 0) {
+        const { uploads } = await createImageUploads({
+          data: {
+            files: imageFiles.map((file) => {
+              if (!isVehicleImageContentType(file.type))
+                throw new Error(
+                  `${file.name} must be a JPEG, PNG, or WebP image.`,
+                );
+              return { contentType: file.type, size: file.size };
+            }),
+          },
+          headers,
+        });
+        uploadPaths = uploads.map((upload) => upload.path);
+        images = await Promise.all(
+          uploads.map(async (upload, index) => {
+            const file = imageFiles[index];
+            if (!file)
+              throw new Error("Vehicle image selection changed during upload.");
+            const { error } = await supabase.storage
+              .from("vehicle-images")
+              .uploadToSignedUrl(upload.path, upload.token, file, {
+                contentType: file.type,
+                upsert: false,
+              });
+            if (error)
+              throw new Error(
+                `Could not upload ${file.name}: ${error.message}`,
+              );
+            return upload.publicUrl;
+          }),
+        );
+      }
+
       const result = await saveCar({
         data: {
           brand: String(form.get("brand")),
@@ -907,15 +956,33 @@ function CostingDialog({
           flatbedTransport: costs.transport,
           brokerWholesalePrice: Number(tradeTerms.wholesalePrice),
           brokerCommissionRatePercent: Number(tradeTerms.commissionRate),
+          images,
         },
         headers,
       });
+      uploadPaths = [];
+      formElement.reset();
+      setImageFiles([]);
       toast.success(
         `Vehicle saved. Total true cost: ${formatKsh(result.totalTrueCostKsh)}.`,
       );
       onOpenChange(false);
       onSaved();
     } catch (error) {
+      if (uploadPaths.length > 0) {
+        try {
+          const headers = await getSupabaseAuthHeaders();
+          await deleteImageUploads({ data: { paths: uploadPaths }, headers });
+        } catch (cleanupError) {
+          console.error(
+            "Could not clean up vehicle image uploads",
+            cleanupError,
+          );
+          toast.error(
+            "The vehicle could not be saved, and some uploaded images may need cleanup.",
+          );
+        }
+      }
       console.error("Could not save vehicle sourcing and import costs", error);
       toast.error(
         error instanceof Error
@@ -925,6 +992,26 @@ function CostingDialog({
     } finally {
       setBusy(false);
     }
+  }
+
+  function addImageFiles(files: FileList | null) {
+    if (!files?.length) return;
+    const selected = Array.from(files);
+    const invalidFile = selected.find(
+      (file) =>
+        !isVehicleImageContentType(file.type) || file.size > 10 * 1024 * 1024,
+    );
+    if (invalidFile) {
+      toast.error(
+        `${invalidFile.name} must be a JPEG, PNG, or WebP image no larger than 10 MB.`,
+      );
+      return;
+    }
+    if (imageFiles.length + selected.length > 12) {
+      toast.error("Add up to 12 vehicle images.");
+      return;
+    }
+    setImageFiles((current) => [...current, ...selected]);
   }
 
   const costInputs = [
@@ -940,8 +1027,8 @@ function CostingDialog({
         <DialogHeader>
           <DialogTitle>Vehicle Sourcing &amp; Costing</DialogTitle>
           <DialogDescription>
-            Costs total automatically. Saving requires a signed-in yard owner or
-            manager.
+            Add up to 12 vehicle images. Costs total automatically, and the
+            vehicle is saved to your assigned yard.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
@@ -990,6 +1077,46 @@ function CostingDialog({
                 className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
               />
             </label>
+            <label className="space-y-1 text-sm font-medium sm:col-span-2">
+              Vehicle images
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                onChange={(event) => {
+                  addImageFiles(event.currentTarget.files);
+                  event.currentTarget.value = "";
+                }}
+                className="block w-full rounded-lg border bg-background px-3 py-2 font-normal file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-sm file:font-medium"
+              />
+              <span className="block text-xs font-normal text-muted-foreground">
+                JPEG, PNG, or WebP · up to 10 MB each · maximum 12 images
+              </span>
+            </label>
+            {imageFiles.length > 0 && (
+              <ul className="space-y-2 sm:col-span-2">
+                {imageFiles.map((file, index) => (
+                  <li
+                    key={`${file.name}-${file.lastModified}-${index}`}
+                    className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm"
+                  >
+                    <span className="min-w-0 truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setImageFiles((current) =>
+                          current.filter((_, fileIndex) => fileIndex !== index),
+                        )
+                      }
+                      className="shrink-0 text-xs font-semibold text-destructive"
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {costInputs.map(({ key, label }) => (
