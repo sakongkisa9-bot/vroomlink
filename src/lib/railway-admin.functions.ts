@@ -45,6 +45,15 @@ const createCarSchema = z.object({
   etaDate: z.string().date().nullable().optional(),
   images: z.array(z.string().trim().min(1).max(500)).max(12).default([]),
   description: z.string().trim().max(2000).nullable().optional(),
+  sourceCountry: z.string().trim().max(80).nullable().optional(),
+  sourceSeller: z.string().trim().max(160).nullable().optional(),
+  titleStatus: z.string().trim().max(80).nullable().optional(),
+  logbookNumber: z.string().trim().max(100).nullable().optional(),
+  importEntryNumber: z.string().trim().max(100).nullable().optional(),
+  conditionGrade: z.string().trim().max(40).nullable().optional(),
+  accidentHistory: z.string().trim().max(1000).nullable().optional(),
+  serviceHistory: z.string().trim().max(1000).nullable().optional(),
+  inspectionNotes: z.string().trim().max(2000).nullable().optional(),
   cifPurchasePrice: money,
   kraImportDuty: money,
   portClearanceFees: money,
@@ -60,6 +69,32 @@ const updateCarSchema = z.object({
   sellingPrice: money.positive(),
   statusBadge: z.enum(["PURCHASED", "ON_OCEAN", "PORT_CLEARING", "IN_YARD"]),
   year: z.number().int().min(1900).max(2100),
+  mileageKm: z.number().int().nonnegative(),
+  engineCc: z.number().int().positive().nullable(),
+  transmission: z.string().trim().min(1).max(40),
+  fuel: z.string().trim().min(1).max(40),
+  color: z.string().trim().max(60).nullable(),
+  bodyType: z.string().trim().max(60).nullable(),
+  drive: z.string().trim().max(60).nullable(),
+  bookingDepositKsh: money,
+  etaDate: z.string().date().nullable(),
+  images: z.array(z.string().trim().min(1).max(500)).max(12),
+  description: z.string().trim().max(2000).nullable(),
+  cifPurchasePrice: money,
+  kraImportDuty: money,
+  portClearanceFees: money,
+  flatbedTransport: money,
+  brokerWholesalePrice: money,
+  brokerCommissionRatePercent: z.number().min(0).max(100),
+  sourceCountry: z.string().trim().max(80).nullable(),
+  sourceSeller: z.string().trim().max(160).nullable(),
+  titleStatus: z.string().trim().max(80).nullable(),
+  logbookNumber: z.string().trim().max(100).nullable(),
+  importEntryNumber: z.string().trim().max(100).nullable(),
+  conditionGrade: z.string().trim().max(40).nullable(),
+  accidentHistory: z.string().trim().max(1000).nullable(),
+  serviceHistory: z.string().trim().max(1000).nullable(),
+  inspectionNotes: z.string().trim().max(2000).nullable(),
 });
 const createVehicleImageUploadUrlsSchema = z.object({
   files: z
@@ -249,14 +284,20 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
         insert into cars (
           dealer_id, brand, model, chassis_number, selling_price, status_badge,
           year, mileage_km, engine_cc, transmission, fuel, color, body_type, drive,
-          booking_deposit_ksh, eta_date, images, description
+          booking_deposit_ksh, eta_date, images, description, source_country,
+          source_seller, title_status, logbook_number, import_entry_number,
+          condition_grade, accident_history, service_history, inspection_notes
         ) values (
           ${dealerId}, ${data.brand}, ${data.model}, ${data.chassisNumber ?? null},
           ${data.sellingPrice}, ${data.statusBadge}, ${data.year}, ${data.mileageKm},
           ${data.engineCc ?? null}, ${data.transmission}, ${data.fuel},
           ${data.color ?? null}, ${data.bodyType ?? null}, ${data.drive ?? null},
           ${data.bookingDepositKsh}, ${data.etaDate ?? null}, ${data.images},
-          ${data.description ?? null}
+          ${data.description ?? null}, ${data.sourceCountry ?? null},
+          ${data.sourceSeller ?? null}, ${data.titleStatus ?? null},
+          ${data.logbookNumber ?? null}, ${data.importEntryNumber ?? null},
+          ${data.conditionGrade ?? null}, ${data.accidentHistory ?? null},
+          ${data.serviceHistory ?? null}, ${data.inspectionNotes ?? null}
         )
         returning id
       `;
@@ -323,6 +364,26 @@ export const updateDealerCar = createServerFn({ method: "POST" })
           selling_price = ${data.sellingPrice},
           status_badge = ${data.statusBadge},
           year = ${data.year},
+          mileage_km = ${data.mileageKm},
+          engine_cc = ${data.engineCc},
+          transmission = ${data.transmission},
+          fuel = ${data.fuel},
+          color = ${data.color},
+          body_type = ${data.bodyType},
+          drive = ${data.drive},
+          booking_deposit_ksh = ${data.bookingDepositKsh},
+          eta_date = ${data.etaDate},
+          images = ${data.images},
+          description = ${data.description},
+          source_country = ${data.sourceCountry},
+          source_seller = ${data.sourceSeller},
+          title_status = ${data.titleStatus},
+          logbook_number = ${data.logbookNumber},
+          import_entry_number = ${data.importEntryNumber},
+          condition_grade = ${data.conditionGrade},
+          accident_history = ${data.accidentHistory},
+          service_history = ${data.serviceHistory},
+          inspection_notes = ${data.inspectionNotes},
           updated_at = now()
         where id = ${data.carId}
           and dealer_id = ${dealerId}
@@ -335,6 +396,23 @@ export const updateDealerCar = createServerFn({ method: "POST" })
         throw new Error(
           "Vehicle not found in your yard or it has already been sold.",
         );
+
+      await transaction`
+        update import_costs
+        set cif_purchase_price = ${data.cifPurchasePrice},
+          kra_import_duty = ${data.kraImportDuty},
+          port_clearance_fees = ${data.portClearanceFees},
+          flatbed_transport = ${data.flatbedTransport},
+          updated_at = now()
+        where car_id = ${car.id} and dealer_id = ${dealerId}
+      `;
+      await transaction`
+        update vehicle_trade_pricing
+        set wholesale_price = ${data.brokerWholesalePrice},
+          broker_commission_rate_percent = ${data.brokerCommissionRatePercent},
+          updated_at = now()
+        where car_id = ${car.id} and yard_id = ${dealerId}
+      `;
 
       return { carId: car.id };
     });
@@ -899,15 +977,55 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
           selling_price: string;
           status_badge: "PURCHASED" | "ON_OCEAN" | "PORT_CLEARING" | "IN_YARD";
           chassis_number: string | null;
+          mileage_km: number;
+          engine_cc: number | null;
+          transmission: string;
+          fuel: string;
+          color: string | null;
+          body_type: string | null;
+          drive: string | null;
+          booking_deposit_ksh: string;
+          eta_date: string | null;
+          images: string[];
+          description: string | null;
+          cif_purchase_price: string;
+          kra_import_duty: string;
+          port_clearance_fees: string;
+          flatbed_transport: string;
+          broker_wholesale_price: string;
+          broker_commission_rate_percent: string;
+          source_country: string | null;
+          source_seller: string | null;
+          title_status: string | null;
+          logbook_number: string | null;
+          import_entry_number: string | null;
+          condition_grade: string | null;
+          accident_history: string | null;
+          service_history: string | null;
+          inspection_notes: string | null;
         }[]
       >`
-      select id, brand, model, year, selling_price::text, status_badge, chassis_number
-      from cars
-      where dealer_id = ${dealerId}
+      select c.id, c.brand, c.model, c.year, c.selling_price::text,
+        c.status_badge, c.chassis_number, c.mileage_km, c.engine_cc,
+        c.transmission, c.fuel, c.color, c.body_type, c.drive,
+        c.booking_deposit_ksh::text, c.eta_date::text, c.images, c.description,
+        coalesce(ic.cif_purchase_price, 0)::text as cif_purchase_price,
+        coalesce(ic.kra_import_duty, 0)::text as kra_import_duty,
+        coalesce(ic.port_clearance_fees, 0)::text as port_clearance_fees,
+        coalesce(ic.flatbed_transport, 0)::text as flatbed_transport,
+        coalesce(tp.wholesale_price, 0)::text as broker_wholesale_price,
+        coalesce(tp.broker_commission_rate_percent, 0)::text as broker_commission_rate_percent,
+        c.source_country, c.source_seller, c.title_status, c.logbook_number,
+        c.import_entry_number, c.condition_grade, c.accident_history,
+        c.service_history, c.inspection_notes
+      from cars c
+      left join import_costs ic on ic.car_id = c.id and ic.dealer_id = c.dealer_id
+      left join vehicle_trade_pricing tp on tp.car_id = c.id and tp.yard_id = c.dealer_id
+      where c.dealer_id = ${dealerId}
         and not exists (
-          select 1 from vehicle_sales vs where vs.car_id = cars.id
+          select 1 from vehicle_sales vs where vs.car_id = c.id
         )
-      order by created_at desc
+      order by c.created_at desc
       limit 100
     `;
 

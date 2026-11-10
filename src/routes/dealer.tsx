@@ -435,11 +435,16 @@ function EditVehicleDialog({
   onSaved: () => void;
 }) {
   const saveCar = useServerFn(updateDealerCar);
+  const createImageUploads = useServerFn(createVehicleImageUploadUrls);
+  const deleteImageUploads = useServerFn(deleteVehicleImageUploads);
   const [busy, setBusy] = useState(false);
+  const [images, setImages] = useState(vehicle.images);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    let uploadPaths: string[] = [];
     setBusy(true);
     try {
       const headers = await getSupabaseAuthHeaders();
@@ -447,6 +452,35 @@ function EditVehicleDialog({
         (stage) => stage.status === form.get("statusBadge"),
       )?.status;
       if (!statusBadge) throw new Error("Choose a valid inventory status.");
+      let uploadedImages: string[] = [];
+      if (imageFiles.length > 0) {
+        const { uploads } = await createImageUploads({
+          data: {
+            files: imageFiles.map((file) => {
+              if (!isVehicleImageContentType(file.type))
+                throw new Error(`${file.name} must be a JPEG, PNG, or WebP image.`);
+              return { contentType: file.type, size: file.size };
+            }),
+          },
+          headers,
+        });
+        uploadPaths = uploads.map((upload) => upload.path);
+        uploadedImages = await Promise.all(
+          uploads.map(async (upload, index) => {
+            const file = imageFiles[index];
+            if (!file) throw new Error("Vehicle image selection changed during upload.");
+            const { error } = await supabase.storage
+              .from("vehicle-images")
+              .uploadToSignedUrl(upload.path, upload.token, file, {
+                contentType: file.type,
+                upsert: false,
+              });
+            if (error) throw new Error(`Could not upload ${file.name}: ${error.message}`);
+            return upload.publicUrl;
+          }),
+        );
+      }
+      const nextImages = [...images, ...uploadedImages];
       await saveCar({
         data: {
           carId: vehicle.id,
@@ -456,12 +490,65 @@ function EditVehicleDialog({
           sellingPrice: Number(form.get("sellingPrice")),
           chassisNumber: String(form.get("chassisNumber") || "") || null,
           statusBadge,
+          mileageKm: Number(form.get("mileageKm")),
+          engineCc: Number(form.get("engineCc")) || null,
+          transmission: String(form.get("transmission")),
+          fuel: String(form.get("fuel")),
+          color: String(form.get("color") || "") || null,
+          bodyType: String(form.get("bodyType") || "") || null,
+          drive: String(form.get("drive") || "") || null,
+          bookingDepositKsh: Number(form.get("bookingDepositKsh")),
+          etaDate: String(form.get("etaDate") || "") || null,
+          images: nextImages,
+          description: String(form.get("description") || "") || null,
+          cifPurchasePrice: Number(form.get("cifPurchasePrice")),
+          kraImportDuty: Number(form.get("kraImportDuty")),
+          portClearanceFees: Number(form.get("portClearanceFees")),
+          flatbedTransport: Number(form.get("flatbedTransport")),
+          brokerWholesalePrice: Number(form.get("brokerWholesalePrice")),
+          brokerCommissionRatePercent: Number(form.get("brokerCommissionRatePercent")),
+          sourceCountry: String(form.get("sourceCountry") || "") || null,
+          sourceSeller: String(form.get("sourceSeller") || "") || null,
+          titleStatus: String(form.get("titleStatus") || "") || null,
+          logbookNumber: String(form.get("logbookNumber") || "") || null,
+          importEntryNumber: String(form.get("importEntryNumber") || "") || null,
+          conditionGrade: String(form.get("conditionGrade") || "") || null,
+          accidentHistory: String(form.get("accidentHistory") || "") || null,
+          serviceHistory: String(form.get("serviceHistory") || "") || null,
+          inspectionNotes: String(form.get("inspectionNotes") || "") || null,
         },
         headers,
       });
+      uploadPaths = [];
+      const removedImagePaths = vehicle.images
+        .filter((image) => !images.includes(image))
+        .map((image) => {
+          const marker = "/vehicle-images/";
+          const pathStart = new URL(image).pathname.indexOf(marker);
+          return pathStart < 0
+            ? null
+            : decodeURIComponent(new URL(image).pathname.slice(pathStart + marker.length));
+        })
+        .filter((path): path is string => path !== null);
+      if (removedImagePaths.length > 0) {
+        try {
+          await deleteImageUploads({ data: { paths: removedImagePaths }, headers });
+        } catch (error) {
+          console.error("Could not clean up removed vehicle images", error);
+          toast.error("Vehicle saved, but removed image files could not be cleaned up.");
+        }
+      }
       toast.success("Vehicle details updated.");
       onSaved();
     } catch (error) {
+      if (uploadPaths.length > 0) {
+        try {
+          const headers = await getSupabaseAuthHeaders();
+          await deleteImageUploads({ data: { paths: uploadPaths }, headers });
+        } catch (cleanupError) {
+          console.error("Could not clean up vehicle image uploads", cleanupError);
+        }
+      }
       console.error("Could not update vehicle details", error);
       toast.error(
         error instanceof Error ? error.message : "Could not update vehicle.",
@@ -482,6 +569,7 @@ function EditVehicleDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
+          <h3 className="text-sm font-semibold">Basic vehicle identification &amp; specs</h3>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5 text-sm font-medium">
               Brand
@@ -514,6 +602,38 @@ function EditVehicleDialog({
               />
             </label>
             <label className="space-y-1.5 text-sm font-medium">
+              Mileage (km)
+              <input name="mileageKm" type="number" min="0" defaultValue={vehicle.mileage_km} required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Engine (cc)
+              <input name="engineCc" type="number" min="1" defaultValue={vehicle.engine_cc ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Transmission
+              <input name="transmission" defaultValue={vehicle.transmission} required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Fuel
+              <input name="fuel" defaultValue={vehicle.fuel} required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Color
+              <input name="color" defaultValue={vehicle.color ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Body type
+              <input name="bodyType" defaultValue={vehicle.body_type ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Drive
+              <input name="drive" defaultValue={vehicle.drive ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
+              Chassis number
+              <input name="chassisNumber" defaultValue={vehicle.chassis_number ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
               Selling price (KSh)
               <input
                 name="sellingPrice"
@@ -524,29 +644,101 @@ function EditVehicleDialog({
                 className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
               />
             </label>
-            <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
-              Chassis number
-              <input
-                name="chassisNumber"
-                defaultValue={vehicle.chassis_number ?? ""}
-                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
-              />
-            </label>
-            <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
-              Inventory status
-              <select
-                name="statusBadge"
-                defaultValue={vehicle.status_badge}
-                className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
-              >
-                {pipeline.map((stage) => (
-                  <option key={stage.status} value={stage.status}>
-                    {stage.label}
-                  </option>
-                ))}
-              </select>
+          </div>
+          <h3 className="text-sm font-semibold">Financial &amp; pricing data</h3>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              ["cifPurchasePrice", "CIF purchase price (KSh)", vehicle.cif_purchase_price],
+              ["kraImportDuty", "KRA import duty (KSh)", vehicle.kra_import_duty],
+              ["portClearanceFees", "Port clearance fees (KSh)", vehicle.port_clearance_fees],
+              ["flatbedTransport", "Local transport (KSh)", vehicle.flatbed_transport],
+              ["brokerWholesalePrice", "Broker wholesale price (KSh)", vehicle.broker_wholesale_price],
+              ["brokerCommissionRatePercent", "Broker commission (%)", vehicle.broker_commission_rate_percent],
+              ["bookingDepositKsh", "Booking deposit (KSh)", vehicle.booking_deposit_ksh],
+            ].map(([name, label, value]) => (
+              <label key={String(name)} className="space-y-1.5 text-sm font-medium">
+                {String(label)}
+                <input name={String(name)} type="number" min="0" step="1" defaultValue={String(value)} required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              </label>
+            ))}
+          </div>
+          <h3 className="text-sm font-semibold">Legal, title &amp; source documentation</h3>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              ["sourceCountry", "Source country", vehicle.source_country],
+              ["sourceSeller", "Source seller / auction", vehicle.source_seller],
+              ["titleStatus", "Title status", vehicle.title_status],
+              ["logbookNumber", "Logbook number", vehicle.logbook_number],
+              ["importEntryNumber", "Import entry number", vehicle.import_entry_number],
+            ].map(([name, label, value]) => (
+              <label key={String(name)} className="space-y-1.5 text-sm font-medium">
+                {String(label)}
+                <input name={String(name)} defaultValue={String(value ?? "")} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              </label>
+            ))}
+            <label className="space-y-1.5 text-sm font-medium">
+              ETA date
+              <input name="etaDate" type="date" defaultValue={vehicle.eta_date ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
             </label>
           </div>
+          <h3 className="text-sm font-semibold">Condition &amp; media</h3>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5 text-sm font-medium">
+              Condition grade
+              <input name="conditionGrade" defaultValue={vehicle.condition_grade ?? ""} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Accident history
+              <textarea name="accidentHistory" defaultValue={vehicle.accident_history ?? ""} className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Service history
+              <textarea name="serviceHistory" defaultValue={vehicle.service_history ?? ""} className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium">
+              Inspection notes
+              <textarea name="inspectionNotes" defaultValue={vehicle.inspection_notes ?? ""} className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
+              Listing description
+              <textarea name="description" defaultValue={vehicle.description ?? ""} maxLength={2000} className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <div className="space-y-2 text-sm font-medium sm:col-span-2">
+              Vehicle photos
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {images.map((image, index) => (
+                  <div key={`${image}-${index}`} className="relative aspect-[4/3] overflow-hidden rounded-md border">
+                    <img src={image} alt={`Vehicle photo ${index + 1}`} className="h-full w-full object-cover" />
+                    <button type="button" aria-label={`Remove photo ${index + 1}`} onClick={() => setImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} className="absolute right-1 top-1 rounded bg-background/90 px-2 py-1 text-xs">Remove</button>
+                  </div>
+                ))}
+              </div>
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => {
+                const selected = Array.from(event.currentTarget.files ?? []);
+                const invalidFile = selected.find((file) => !isVehicleImageContentType(file.type) || file.size > 10 * 1024 * 1024);
+                if (invalidFile) toast.error(`${invalidFile.name} must be JPEG, PNG, or WebP and no larger than 10 MB.`);
+                else if (images.length + imageFiles.length + selected.length > 12) toast.error("Add up to 12 vehicle images.");
+                else setImageFiles((current) => [...current, ...selected]);
+                event.currentTarget.value = "";
+              }} className="block w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+              {imageFiles.map((file, index) => <div key={`${file.name}-${file.lastModified}`} className="flex items-center justify-between text-xs"><span>{file.name}</span><button type="button" onClick={() => setImageFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}>Remove</button></div>)}
+            </div>
+          </div>
+          <h3 className="text-sm font-semibold">Inventory status</h3>
+          <label className="space-y-1.5 text-sm font-medium">
+            Inventory status
+            <select
+              name="statusBadge"
+              defaultValue={vehicle.status_badge}
+              className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+            >
+              {pipeline.map((stage) => (
+                <option key={stage.status} value={stage.status}>
+                  {stage.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="submit"
             disabled={busy}
@@ -1109,14 +1301,28 @@ function CostingDialog({
           brand: String(form.get("brand")),
           model: String(form.get("model")),
           year: Number(form.get("year")),
-          mileageKm: 0,
-          engineCc: null,
-          transmission: "Automatic",
-          fuel: "Petrol",
+          mileageKm: Number(form.get("mileageKm")),
+          engineCc: Number(form.get("engineCc")) || null,
+          transmission: String(form.get("transmission")),
+          fuel: String(form.get("fuel")),
+          color: String(form.get("color") || "") || null,
+          bodyType: String(form.get("bodyType") || "") || null,
+          drive: String(form.get("drive") || "") || null,
           sellingPrice: Number(form.get("sellingPrice")),
-          bookingDepositKsh: 100000,
+          bookingDepositKsh: Number(form.get("bookingDepositKsh")),
           statusBadge: "PURCHASED",
           chassisNumber: String(form.get("chassisNumber") || "") || null,
+          etaDate: String(form.get("etaDate") || "") || null,
+          description: String(form.get("description") || "") || null,
+          sourceCountry: String(form.get("sourceCountry") || "") || null,
+          sourceSeller: String(form.get("sourceSeller") || "") || null,
+          titleStatus: String(form.get("titleStatus") || "") || null,
+          logbookNumber: String(form.get("logbookNumber") || "") || null,
+          importEntryNumber: String(form.get("importEntryNumber") || "") || null,
+          conditionGrade: String(form.get("conditionGrade") || "") || null,
+          accidentHistory: String(form.get("accidentHistory") || "") || null,
+          serviceHistory: String(form.get("serviceHistory") || "") || null,
+          inspectionNotes: String(form.get("inspectionNotes") || "") || null,
           cifPurchasePrice: costs.cif,
           kraImportDuty: costs.duty,
           portClearanceFees: costs.port,
@@ -1199,6 +1405,7 @@ function CostingDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
+          <h3 className="text-sm font-semibold">Basic vehicle identification &amp; specs</h3>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-sm font-medium">
               Brand
@@ -1228,6 +1435,34 @@ function CostingDialog({
               />
             </label>
             <label className="space-y-1 text-sm font-medium">
+              Mileage (km)
+              <input name="mileageKm" type="number" min="0" defaultValue="0" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Engine (cc)
+              <input name="engineCc" type="number" min="1" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Transmission
+              <input name="transmission" defaultValue="Automatic" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Fuel
+              <input name="fuel" defaultValue="Petrol" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Color
+              <input name="color" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Body type
+              <input name="bodyType" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Drive
+              <input name="drive" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
               Selling price (KSh)
               <input
                 name="sellingPrice"
@@ -1243,6 +1478,44 @@ function CostingDialog({
                 name="chassisNumber"
                 className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
               />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              ETA date
+              <input name="etaDate" type="date" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <h3 className="text-sm font-semibold sm:col-span-2">Legal, title &amp; source documentation</h3>
+            {[
+              ["sourceCountry", "Source country"],
+              ["sourceSeller", "Source seller / auction"],
+              ["titleStatus", "Title status"],
+              ["logbookNumber", "Logbook number"],
+              ["importEntryNumber", "Import entry number"],
+            ].map(([name, label]) => (
+              <label key={name} className="space-y-1 text-sm font-medium">
+                {label}
+                <input name={name} className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+              </label>
+            ))}
+            <h3 className="text-sm font-semibold sm:col-span-2">Condition &amp; media</h3>
+            <label className="space-y-1 text-sm font-medium">
+              Condition grade
+              <input name="conditionGrade" className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Accident history
+              <textarea name="accidentHistory" className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Service history
+              <textarea name="serviceHistory" className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium">
+              Inspection notes
+              <textarea name="inspectionNotes" className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
+            </label>
+            <label className="space-y-1 text-sm font-medium sm:col-span-2">
+              Listing description
+              <textarea name="description" maxLength={2000} className="min-h-20 w-full rounded-lg border bg-background px-3 py-2 font-normal" />
             </label>
             <label className="space-y-1 text-sm font-medium sm:col-span-2">
               Vehicle images
@@ -1290,6 +1563,7 @@ function CostingDialog({
               <label key={key} className="space-y-1 text-sm font-medium">
                 {label}
                 <input
+                  name={key === "cif" ? "cifPurchasePrice" : key === "duty" ? "kraImportDuty" : key === "port" ? "portClearanceFees" : "flatbedTransport"}
                   type="number"
                   min="0"
                   value={costs[key] || ""}
@@ -1299,6 +1573,7 @@ function CostingDialog({
               </label>
             ))}
           </div>
+          <h3 className="text-sm font-semibold">Financial &amp; pricing data</h3>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-sm font-medium">
               Broker wholesale price (KSh)
@@ -1344,6 +1619,10 @@ function CostingDialog({
               {formatKsh(total)}
             </p>
           </div>
+          <label className="block space-y-1 text-sm font-medium">
+            Booking deposit (KSh)
+            <input name="bookingDepositKsh" type="number" min="0" defaultValue="100000" required className="h-10 w-full rounded-lg border bg-background px-3 font-normal" />
+          </label>
           <button
             type="submit"
             disabled={busy}
