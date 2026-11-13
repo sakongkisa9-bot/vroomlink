@@ -8,6 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { authClient } from "@/integrations/auth-client";
 import {
   linkAuthenticatedWorker,
@@ -16,6 +17,7 @@ import {
 
 export function PortalAuthControl() {
   const { data: session } = authClient.useSession();
+  const initial = session?.user.email?.trim().charAt(0).toUpperCase() || "U";
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -140,9 +142,16 @@ export function PortalAuthControl() {
         title={session?.user.email ?? "Sign in"}
       >
         {session ? (
-          <span aria-hidden="true">
-            {session.user.email?.trim().charAt(0).toUpperCase() || "U"}
-          </span>
+          <Avatar className="h-full w-full">
+            <AvatarImage
+              src={session.user.image ?? undefined}
+              alt=""
+              referrerPolicy="no-referrer"
+            />
+            <AvatarFallback aria-hidden="true" className="bg-transparent">
+              {initial}
+            </AvatarFallback>
+          </Avatar>
         ) : (
           <span>Sign in</span>
         )}
@@ -161,9 +170,22 @@ export function PortalAuthControl() {
           </DialogHeader>
           {session ? (
             <div className="space-y-4">
-              <p className="rounded-lg border bg-muted p-3 text-sm">
-                {session.user.email}
-              </p>
+              <div className="flex items-center gap-3 rounded-lg border bg-muted p-3 text-sm">
+                <Avatar className="h-10 w-10">
+                  <AvatarImage
+                    src={session.user.image ?? undefined}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                  />
+                  <AvatarFallback>{initial}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0">
+                  {session.user.name && (
+                    <p className="truncate font-semibold">{session.user.name}</p>
+                  )}
+                  <p className="truncate">{session.user.email}</p>
+                </div>
+              </div>
               <form onSubmit={addPassword} className="space-y-3">
                 <label className="block space-y-1 text-sm font-medium">
                   Add or reset an email password

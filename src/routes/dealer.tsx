@@ -17,6 +17,7 @@ import {
   deactivateDealerWorker,
   getDealerDashboard,
   recordCompletedVehicleSale,
+  resetWorkerPassword,
   updateDealerCar,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
@@ -60,6 +61,7 @@ export function DealerWorkspace({
   const loadDashboard = useServerFn(getDealerDashboard);
   const deactivateWorker = useServerFn(deactivateDealerWorker);
   const addWorker = useServerFn(createDealerWorker);
+  const resetPassword = useServerFn(resetWorkerPassword);
   const [creatingWorker, setCreatingWorker] = useState(false);
 
   async function loadOwnerDashboard() {
@@ -130,6 +132,9 @@ export function DealerWorkspace({
                   email,
                   workspace_role: workspaceRole,
                   is_active: true,
+                  login_status: result.loginCreated
+                    ? ("TEMPORARY_PASSWORD" as const)
+                    : ("NOT_SIGNED_IN" as const),
                 },
               ],
             }
@@ -149,6 +154,28 @@ export function DealerWorkspace({
     } finally {
       setCreatingWorker(false);
     }
+  }
+
+  async function resetStaffPassword(workerId: string, temporaryPassword: string) {
+    if (!liveDashboard) return;
+    await resetPassword({
+      data: { dealerId: liveDashboard.dealerId, workerId, temporaryPassword },
+    });
+    setLiveDashboard((current) =>
+      current
+        ? {
+            ...current,
+            staff: current.staff.map((worker) =>
+              worker.id === workerId
+                ? { ...worker, login_status: "TEMPORARY_PASSWORD" as const }
+                : worker,
+            ),
+          }
+        : current,
+    );
+    toast.success(
+      "Password reset. Share the temporary password privately; they must change it on next sign-in.",
+    );
   }
 
   async function deactivateLiveWorker(workerId: string) {
@@ -280,6 +307,7 @@ export function DealerWorkspace({
               onCreateWorker={(event) => void createLiveWorker(event)}
               onLoadLiveData={() => void loadOwnerDashboard()}
               onDeactivateLiveWorker={(id) => void deactivateLiveWorker(id)}
+              onResetPassword={resetStaffPassword}
             />
           ) : section === "inventory" ? (
             <InventoryManagement
@@ -1021,6 +1049,7 @@ function StaffTable({
   onCreateWorker,
   onLoadLiveData,
   onDeactivateLiveWorker,
+  onResetPassword,
 }: {
   liveStaff: Awaited<ReturnType<typeof getDealerDashboard>>["staff"] | null;
   loading: boolean;
@@ -1029,7 +1058,14 @@ function StaffTable({
   onCreateWorker: (event: FormEvent<HTMLFormElement>) => void;
   onLoadLiveData: () => void;
   onDeactivateLiveWorker: (id: string) => void;
+  onResetPassword: (id: string, temporaryPassword: string) => Promise<void>;
 }) {
+  const [resetTarget, setResetTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetting, setResetting] = useState(false);
   const staffRows = liveStaff
     ? liveStaff.map((staff) => ({
         id: staff.id,
@@ -1037,8 +1073,27 @@ function StaffTable({
         email: staff.email,
         role: staff.workspace_role,
         is_active: staff.is_active,
+        loginStatus: staff.login_status,
       }))
     : [];
+
+  async function submitReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resetTarget) return;
+    setResetting(true);
+    try {
+      await onResetPassword(resetTarget.id, resetPassword);
+      setResetTarget(null);
+      setResetPassword("");
+    } catch (error) {
+      console.error("Could not reset the staff password", error);
+      toast.error(
+        error instanceof Error ? error.message : "Could not reset the password.",
+      );
+    } finally {
+      setResetting(false);
+    }
+  }
 
   return (
     <section className="rounded-2xl border bg-card p-5 shadow-sm">
@@ -1127,6 +1182,7 @@ function StaffTable({
               <th className="px-3 py-3 font-semibold">Email</th>
               <th className="px-3 py-3 font-semibold">Role</th>
               <th className="px-3 py-3 font-semibold">Status</th>
+              <th className="px-3 py-3 font-semibold">Sign-in</th>
               <th className="px-3 py-3 font-semibold">Action</th>
             </tr>
           </thead>
@@ -1154,7 +1210,40 @@ function StaffTable({
                       {inactive ? "Deactivated" : "Active"}
                     </span>
                   </td>
+                  <td className="px-3 py-4 text-xs">
+                    {staff.loginStatus === "TEMPORARY_PASSWORD"
+                      ? "Temporary password pending"
+                      : staff.loginStatus === "PASSWORD"
+                        ? "Password set"
+                        : staff.loginStatus === "GOOGLE"
+                          ? "Google"
+                          : staff.loginStatus === "GOOGLE_AND_PASSWORD"
+                            ? "Google + password"
+                            : "Not signed in yet"}
+                  </td>
                   <td className="px-3 py-4">
+                    <div className="flex flex-wrap gap-2">
+                      {!owner && !inactive && (
+                        <button
+                          type="button"
+                          disabled={
+                            staff.loginStatus === "GOOGLE" ||
+                            staff.loginStatus === "GOOGLE_AND_PASSWORD"
+                          }
+                          title={
+                            staff.loginStatus === "GOOGLE" ||
+                            staff.loginStatus === "GOOGLE_AND_PASSWORD"
+                              ? "Signs in with Google; no reset needed"
+                              : "Set a new temporary password"
+                          }
+                          onClick={() =>
+                            setResetTarget({ id: staff.id, name: staff.name })
+                          }
+                          className="rounded-lg border px-3 py-2 text-xs font-semibold transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Reset password
+                        </button>
+                      )}
                     <button
                       type="button"
                       disabled={owner || inactive}
@@ -1163,6 +1252,7 @@ function StaffTable({
                     >
                       {inactive ? "Deactivated" : "Deactivate Account"}
                     </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -1170,7 +1260,7 @@ function StaffTable({
             {liveStaff?.length === 0 && (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-3 py-6 text-center text-sm text-muted-foreground"
                 >
                   No workers are registered for this yard.
@@ -1180,7 +1270,7 @@ function StaffTable({
             {liveStaff === null && (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-3 py-6 text-center text-sm text-muted-foreground"
                 >
                   Load live staff records to see available accounts.
@@ -1190,6 +1280,46 @@ function StaffTable({
           </tbody>
         </table>
       </div>
+      <Dialog
+        open={resetTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setResetTarget(null);
+            setResetPassword("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset password for {resetTarget?.name}</DialogTitle>
+            <DialogDescription>
+              Passwords are stored encrypted, so they can&apos;t be viewed. Set a
+              new temporary password and share it privately; they&apos;ll be asked
+              to choose their own on next sign-in.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitReset} className="space-y-3">
+            <input
+              type="text"
+              autoComplete="off"
+              required
+              minLength={8}
+              maxLength={128}
+              value={resetPassword}
+              onChange={(event) => setResetPassword(event.target.value)}
+              placeholder="New temporary password (8+ characters)"
+              className="h-10 w-full rounded-lg border bg-background px-3"
+            />
+            <button
+              type="submit"
+              disabled={resetting}
+              className="h-10 w-full rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+            >
+              {resetting ? "Resetting…" : "Reset password"}
+            </button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

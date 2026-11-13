@@ -173,6 +173,45 @@ async function provisionTemporaryLogin(input: {
   return user.id;
 }
 
+type LoginStatus =
+  | "NOT_SIGNED_IN"
+  | "TEMPORARY_PASSWORD"
+  | "PASSWORD"
+  | "GOOGLE"
+  | "GOOGLE_AND_PASSWORD";
+
+// Auth tables are outside the tenant role's grants, so this runs on the owner connection.
+async function loadLoginStatuses(
+  userIds: string[],
+): Promise<Map<string, LoginStatus>> {
+  const statuses = new Map<string, LoginStatus>();
+  if (userIds.length === 0) return statuses;
+
+  const sql = getRailwayClient();
+  const rows = await sql<
+    { id: string; must_change: boolean; has_google: boolean; has_password: boolean }[]
+  >`
+    select u.id::text as id, u."mustChangePassword" as must_change,
+      exists (select 1 from account a where a."userId" = u.id and a."providerId" = 'google') as has_google,
+      exists (select 1 from account a where a."userId" = u.id and a."providerId" = 'credential') as has_password
+    from "user" u
+    where u.id::text in ${sql(userIds)}
+  `;
+  for (const row of rows) {
+    statuses.set(
+      row.id,
+      row.has_google
+        ? row.has_password
+          ? "GOOGLE_AND_PASSWORD"
+          : "GOOGLE"
+        : row.must_change
+          ? "TEMPORARY_PASSWORD"
+          : "PASSWORD",
+    );
+  }
+  return statuses;
+}
+
 function principal(context: { userId: string; claims: { email?: unknown } }) {
   return {
     userId: uuid.parse(context.userId),
@@ -975,9 +1014,10 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
           email: string;
           workspace_role: WorkspaceRole;
           is_active: boolean;
+          auth_user_id: string | null;
         }[]
       >`
-      select id, full_name, email, workspace_role, is_active
+      select id, full_name, email, workspace_role, is_active, auth_user_id
       from workers
       where dealer_id = ${dealerId}
         and (
@@ -1028,13 +1068,28 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
       limit 100
     `;
 
+      const loginStatuses =
+        data.workspaceRole === "OWNER"
+          ? await loadLoginStatuses(
+              staff.flatMap((member) =>
+                member.auth_user_id ? [member.auth_user_id] : [],
+              ),
+            )
+          : null;
+
       return {
         dealerId,
         yardName: dealer.showroom_name,
         yardSlug: dealer.slug,
         currentRole: worker.workspace_role,
         cars: [...cars],
-        staff: [...staff],
+        staff: staff.map(({ auth_user_id, ...member }) => ({
+          ...member,
+          login_status: loginStatuses
+            ? ((auth_user_id && loginStatuses.get(auth_user_id)) ||
+              "NOT_SIGNED_IN")
+            : null,
+        })),
         logs: [...logs],
         sales: [...sales],
       };
@@ -1090,6 +1145,85 @@ export const changeTemporaryPassword = createServerFn({ method: "POST" })
       where id = ${uuid.parse(context.userId)}::uuid
     `;
     return { changed: true };
+  });
+
+const resetWorkerPasswordSchema = z.object({
+  dealerId: uuid,
+  workerId: uuid,
+  temporaryPassword,
+});
+
+export const resetWorkerPassword = createServerFn({ method: "POST" })
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
+  .inputValidator((input: z.input<typeof resetWorkerPasswordSchema>) =>
+    resetWorkerPasswordSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const actor = principal(context);
+    const target = await withRailwayTransaction(actor, async (transaction) => {
+      await assertDealerWorker(transaction, data.dealerId, actor.userId, ["OWNER"]);
+      const [worker] = await transaction<
+        { auth_user_id: string | null; workspace_role: WorkspaceRole; email: string; full_name: string }[]
+      >`
+        select auth_user_id, workspace_role, email, full_name from workers
+        where id = ${data.workerId} and dealer_id = ${data.dealerId} and is_active
+      `;
+      if (!worker) throw new Error("Active worker not found in this yard.");
+      if (worker.workspace_role === "OWNER")
+        throw new Error("Owner passwords can only be reset by the developer.");
+      return worker;
+    });
+
+    const sql = getRailwayClient();
+    const { password } = await getRailwayAuth().$context;
+    const hash = await password.hash(data.temporaryPassword);
+
+    if (!target.auth_user_id) {
+      const userId = await provisionTemporaryLogin({
+        email: target.email,
+        fullName: target.full_name,
+        password: data.temporaryPassword,
+      });
+      if (!userId)
+        throw new Error(
+          "This email already has an account. The worker should sign in with Google, or use the account menu to set a password.",
+        );
+      await withRailwayTransaction(actor, (transaction) => transaction`
+        update workers set auth_user_id = ${userId}
+        where id = ${data.workerId} and dealer_id = ${data.dealerId}
+      `);
+      return { reset: true };
+    }
+
+    // Only accounts owned by this one yard and protected solely by a password may be reset by an owner.
+    const [guard] = await sql<{ safe: boolean }[]>`
+      select (
+        exists (select 1 from account where "userId" = ${target.auth_user_id}::uuid and "providerId" = 'credential')
+        and not exists (select 1 from account where "userId" = ${target.auth_user_id}::uuid and "providerId" <> 'credential')
+        and not exists (
+          select 1 from workers
+          where auth_user_id = ${target.auth_user_id}::uuid and dealer_id <> ${data.dealerId}
+        )
+        and not exists (
+          select 1 from platform_admins pa join "user" u on lower(u.email) = pa.email
+          where u.id = ${target.auth_user_id}::uuid
+        )
+      ) as safe
+    `;
+    if (!guard?.safe)
+      throw new Error(
+        "This account uses Google or belongs to more than one yard, so a password reset isn't available. The worker can use Google sign-in or the account menu.",
+      );
+
+    await sql.begin(async (tx) => {
+      await tx`
+        update account set password = ${hash}, "updatedAt" = now()
+        where "userId" = ${target.auth_user_id!}::uuid and "providerId" = 'credential'
+      `;
+      await tx`update "user" set "mustChangePassword" = true where id = ${target.auth_user_id!}::uuid`;
+      await tx`delete from session where "userId" = ${target.auth_user_id!}::uuid`;
+    });
+    return { reset: true };
   });
 
 export const setAccountPassword = createServerFn({ method: "POST" })
