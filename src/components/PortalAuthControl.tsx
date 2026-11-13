@@ -1,5 +1,4 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { Session } from "@supabase/supabase-js";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import {
@@ -9,51 +8,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { isBrowserSupabaseConfigured, supabase } from "@/integrations/client";
-import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
-import { linkAuthenticatedWorker } from "@/lib/railway-admin.functions";
+import { authClient } from "@/integrations/auth-client";
+import {
+  linkAuthenticatedWorker,
+  setAccountPassword,
+} from "@/lib/railway-admin.functions";
 
 export function PortalAuthControl() {
-  const [session, setSession] = useState<Session | null>(null);
+  const { data: session } = authClient.useSession();
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const linkWorker = useServerFn(linkAuthenticatedWorker);
-  const configured = isBrowserSupabaseConfigured();
+  const savePassword = useServerFn(setAccountPassword);
+  const userId = session?.user.id;
 
   useEffect(() => {
-    if (!configured) return;
+    if (!userId) return;
 
     let active = true;
-    void supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) return;
-      if (error) {
-        console.error("Could not restore the Supabase session", error);
-        toast.error("Could not restore your sign-in session.");
-        return;
-      }
-      setSession(data.session);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-  }, [configured]);
-
-  useEffect(() => {
-    if (!session?.user) return;
-
-    let active = true;
-    void getSupabaseAuthHeaders()
-      .then((headers) => linkWorker({ headers }))
+    linkWorker()
       .then(({ linkedWorkers }) => {
         if (active && linkedWorkers > 0) {
           toast.success(
@@ -77,50 +53,21 @@ export function PortalAuthControl() {
     return () => {
       active = false;
     };
-  }, [linkWorker, session?.user.id]);
+  }, [linkWorker, userId]);
 
   async function signInWithPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
+      const { error } = await authClient.signIn.email({ email, password });
+      if (error) throw new Error(error.message ?? "Email sign-in failed.");
       setPassword("");
       setOpen(false);
       toast.success("Signed in successfully.");
     } catch (error) {
-      console.error("Supabase email sign-in failed", error);
+      console.error("Email sign-in failed", error);
       toast.error(
         error instanceof Error ? error.message : "Email sign-in failed.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function sendEmailLink() {
-    if (!email.trim()) {
-      toast.error("Enter your email address first.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-        options: { emailRedirectTo: window.location.href },
-      });
-      if (error) throw error;
-      toast.success("Check your email for a secure sign-in link.");
-    } catch (error) {
-      console.error("Supabase email-link sign-in failed", error);
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Could not send a sign-in link.",
       );
     } finally {
       setBusy(false);
@@ -130,13 +77,13 @@ export function PortalAuthControl() {
   async function signInWithGoogle() {
     setBusy(true);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { error } = await authClient.signIn.social({
         provider: "google",
-        options: { redirectTo: window.location.href },
+        callbackURL: window.location.href,
       });
-      if (error) throw error;
+      if (error) throw new Error(error.message ?? "Google sign-in failed.");
     } catch (error) {
-      console.error("Supabase Google sign-in failed", error);
+      console.error("Google sign-in failed", error);
       toast.error(
         error instanceof Error ? error.message : "Google sign-in failed.",
       );
@@ -144,17 +91,33 @@ export function PortalAuthControl() {
     }
   }
 
+  async function addPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await savePassword({ data: { newPassword } });
+      setNewPassword("");
+      toast.success("Password saved. You can now sign in with email and password.");
+    } catch (error) {
+      console.error("Could not save password", error);
+      toast.error(
+        error instanceof Error ? error.message : "Could not save password.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function signOut() {
     setBusy(true);
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      setSession(null);
+      const { error } = await authClient.signOut();
+      if (error) throw new Error(error.message ?? "Sign-out failed.");
       setOpen(false);
       toast.success("Signed out.");
       window.location.reload();
     } catch (error) {
-      console.error("Supabase sign-out failed", error);
+      console.error("Sign-out failed", error);
       toast.error(error instanceof Error ? error.message : "Sign-out failed.");
     } finally {
       setBusy(false);
@@ -192,21 +155,37 @@ export function PortalAuthControl() {
             </DialogTitle>
             <DialogDescription>
               {session
-                ? "Protected portal actions use your verified Supabase identity and assigned role."
-                : "Sign in with email or Google. Yard access is granted only when your account is assigned to an active worker record."}
+                ? "Protected portal actions use your verified identity and assigned role."
+                : "Sign in with Google, or with email and password once you have added one. Yard access is granted only when your account is assigned to an active worker record."}
             </DialogDescription>
           </DialogHeader>
-          {!configured ? (
-            <p className="rounded-lg border bg-muted p-3 text-sm text-muted-foreground">
-              Supabase browser configuration is missing. Set the
-              VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY build
-              variables, then rebuild the client.
-            </p>
-          ) : session ? (
+          {session ? (
             <div className="space-y-4">
               <p className="rounded-lg border bg-muted p-3 text-sm">
                 {session.user.email}
               </p>
+              <form onSubmit={addPassword} className="space-y-3">
+                <label className="block space-y-1 text-sm font-medium">
+                  Add or reset an email password
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    minLength={8}
+                    maxLength={128}
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="h-10 w-full rounded-lg border px-4 text-sm font-semibold disabled:opacity-50"
+                >
+                  Save password
+                </button>
+              </form>
               <button
                 type="button"
                 disabled={busy}
@@ -262,14 +241,6 @@ export function PortalAuthControl() {
                   {busy ? "Signing in…" : "Sign in with email"}
                 </button>
               </form>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void sendEmailLink()}
-                className="w-full text-sm font-medium text-primary underline-offset-4 hover:underline disabled:opacity-50"
-              >
-                Send me a secure email sign-in link
-              </button>
             </div>
           )}
         </DialogContent>

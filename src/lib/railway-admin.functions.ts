@@ -1,30 +1,15 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { getRequest } from "@tanstack/react-start/server";
 import type { TransactionSql } from "postgres";
 import { z } from "zod";
 import { requireRailwaySystemActiveMiddleware } from "@/integrations/railway-middleware";
-import { requireSupabaseAuth } from "@/integrations/auth-middleware";
-import type { Database } from "@/integrations/types";
-import { withRailwayTransaction } from "./railway.server";
+import { requireRailwayAuth } from "@/integrations/railway-auth-middleware";
+import { getRailwayAuth } from "@/integrations/railway-auth.server";
+import { getRailwayClient, withRailwayTransaction } from "./railway.server";
 
 const uuid = z.string().uuid();
 const money = z.number().int().safe().nonnegative();
 type WorkspaceRole = "OWNER" | "YARD_MANAGER" | "SALESPERSON" | "BROKER";
-const VEHICLE_IMAGES_BUCKET = "vehicle-images";
-const vehicleImageContentType = z.enum([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
-const vehicleImageMaxSizeBytes = 10 * 1024 * 1024;
-const vehicleImageExtensions: Record<
-  z.infer<typeof vehicleImageContentType>,
-  string
-> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
 
 const createCarSchema = z.object({
   dealerId: uuid.optional(),
@@ -96,19 +81,11 @@ const updateCarSchema = z.object({
   serviceHistory: z.string().trim().max(1000).nullable(),
   inspectionNotes: z.string().trim().max(2000).nullable(),
 });
-const createVehicleImageUploadUrlsSchema = z.object({
-  files: z
-    .array(
-      z.object({
-        contentType: vehicleImageContentType,
-        size: z.number().int().positive().max(vehicleImageMaxSizeBytes),
-      }),
-    )
-    .min(1)
-    .max(12),
-});
 const deleteVehicleImageUploadsSchema = z.object({
-  paths: z.array(z.string().trim().min(1).max(200)).max(12),
+  imageIds: z.array(uuid).max(12),
+});
+const setAccountPasswordSchema = z.object({
+  newPassword: z.string().min(8).max(128),
 });
 const submitBrokerLeadSchema = z.object({
   carId: uuid,
@@ -159,8 +136,7 @@ const createDealerSchema = z.object({
 type AuthContext = {
   userId: string;
   claims: { email?: unknown };
-  supabase: SupabaseClient<Database>;
-  accessToken: string;
+  emailVerified: boolean;
 };
 
 function principal(context: { userId: string; claims: { email?: unknown } }) {
@@ -174,15 +150,17 @@ function principal(context: { userId: string; claims: { email?: unknown } }) {
 }
 
 async function assertSuperAdmin(context: AuthContext): Promise<void> {
-  const { data, error } = await context.supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", context.userId)
-    .eq("role", "super_admin")
-    .maybeSingle();
-  if (error)
-    throw new Error(`Could not verify super-admin role: ${error.message}`);
-  if (!data) throw new Error("Unauthorized: super-admin access required.");
+  const email =
+    typeof context.claims.email === "string"
+      ? context.claims.email.trim().toLowerCase()
+      : "";
+  if (!context.emailVerified || !email)
+    throw new Error("Unauthorized: super-admin access required.");
+
+  const [admin] = await getRailwayClient()`
+    select 1 as ok from platform_admins where email = ${email}
+  `;
+  if (!admin) throw new Error("Unauthorized: super-admin access required.");
 }
 
 async function assertDealerWorker(
@@ -247,13 +225,13 @@ async function resolveCurrentDealerId(
   `;
   if (!membership)
     throw new Error(
-      "No active yard worker account is linked to this Supabase user.",
+      "No active yard worker account is linked to this sign-in.",
     );
   return membership.dealer_id;
 }
 
 export const createCarWithImportCosts = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof createCarSchema>) =>
     createCarSchema.parse(input),
   )
@@ -337,7 +315,7 @@ export const createCarWithImportCosts = createServerFn({ method: "POST" })
   });
 
 export const updateDealerCar = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof updateCarSchema>) =>
     updateCarSchema.parse(input),
   )
@@ -418,129 +396,39 @@ export const updateDealerCar = createServerFn({ method: "POST" })
     });
   });
 
-export const createVehicleImageUploadUrls = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
-  .inputValidator((input: z.input<typeof createVehicleImageUploadUrlsSchema>) =>
-    createVehicleImageUploadUrlsSchema.parse(input),
-  )
-  .handler(async ({ data, context }) => {
-    const actor = principal(context);
-    const dealerId = await withRailwayTransaction(
-      actor,
-      async (transaction) => {
-        const currentDealerId = await resolveCurrentDealerId(
-          transaction,
-          actor.userId,
-          undefined,
-          ["OWNER", "YARD_MANAGER", "SALESPERSON"],
-        );
-        await assertDealerWorker(transaction, currentDealerId, actor.userId, [
-          "OWNER",
-          "YARD_MANAGER",
-          "SALESPERSON",
-        ]);
-        return currentDealerId;
-      },
-    );
-
-    const { supabaseAdmin } = await import("@/integrations/client.server");
-    const { data: buckets, error: listError } =
-      await supabaseAdmin.storage.listBuckets();
-    if (listError)
-      throw new Error(
-        `Could not check vehicle image storage: ${listError.message}`,
-      );
-
-    const bucket = buckets.find(
-      (candidate) => candidate.name === VEHICLE_IMAGES_BUCKET,
-    );
-    if (!bucket) {
-      const { error: createError } = await supabaseAdmin.storage.createBucket(
-        VEHICLE_IMAGES_BUCKET,
-        {
-          public: true,
-          fileSizeLimit: "10MB",
-          allowedMimeTypes: vehicleImageContentType.options,
-        },
-      );
-      if (createError)
-        throw new Error(
-          `Could not initialize vehicle image storage: ${createError.message}`,
-        );
-    } else if (!bucket.public) {
-      throw new Error(
-        "The vehicle image storage bucket must be public to display car photos.",
-      );
-    }
-
-    const uploads = await Promise.all(
-      data.files.map(async ({ contentType }) => {
-        const path = `${dealerId}/${crypto.randomUUID()}.${vehicleImageExtensions[contentType]}`;
-        const { data: signedUpload, error } = await supabaseAdmin.storage
-          .from(VEHICLE_IMAGES_BUCKET)
-          .createSignedUploadUrl(path);
-        if (error)
-          throw new Error(`Could not prepare image upload: ${error.message}`);
-        return {
-          path: signedUpload.path,
-          token: signedUpload.token,
-          publicUrl: supabaseAdmin.storage
-            .from(VEHICLE_IMAGES_BUCKET)
-            .getPublicUrl(signedUpload.path).data.publicUrl,
-        };
-      }),
-    );
-
-    return { uploads };
-  });
-
 export const deleteVehicleImageUploads = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof deleteVehicleImageUploadsSchema>) =>
     deleteVehicleImageUploadsSchema.parse(input),
   )
   .handler(async ({ data, context }) => {
-    if (data.paths.length === 0) return { deleted: 0 };
+    if (data.imageIds.length === 0) return { deleted: 0 };
 
     const actor = principal(context);
-    const dealerId = await withRailwayTransaction(
-      actor,
-      async (transaction) => {
-        const currentDealerId = await resolveCurrentDealerId(
-          transaction,
-          actor.userId,
-          undefined,
-          ["OWNER", "YARD_MANAGER", "SALESPERSON"],
-        );
-        await assertDealerWorker(transaction, currentDealerId, actor.userId, [
-          "OWNER",
-          "YARD_MANAGER",
-          "SALESPERSON",
-        ]);
-        return currentDealerId;
-      },
-    );
-
-    const ownedImagePath = new RegExp(
-      `^${dealerId}/[0-9a-f-]{36}\\.(?:jpg|png|webp)$`,
-    );
-    if (data.paths.some((path) => !ownedImagePath.test(path)))
-      throw new Error("Cannot remove vehicle images outside your yard.");
-
-    const { supabaseAdmin } = await import("@/integrations/client.server");
-    const { error } = await supabaseAdmin.storage
-      .from(VEHICLE_IMAGES_BUCKET)
-      .remove(data.paths);
-    if (error)
-      throw new Error(
-        `Could not clean up vehicle image uploads: ${error.message}`,
+    return withRailwayTransaction(actor, async (transaction) => {
+      const dealerId = await resolveCurrentDealerId(
+        transaction,
+        actor.userId,
+        undefined,
+        ["OWNER", "YARD_MANAGER", "SALESPERSON"],
       );
+      await assertDealerWorker(transaction, dealerId, actor.userId, [
+        "OWNER",
+        "YARD_MANAGER",
+        "SALESPERSON",
+      ]);
 
-    return { deleted: data.paths.length };
+      const removed = await transaction<{ id: string }[]>`
+        delete from vehicle_images
+        where id in ${transaction(data.imageIds)} and yard_id = ${dealerId}
+        returning id
+      `;
+      return { deleted: removed.length };
+    });
   });
 
 export const getBrokerDashboard = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .handler(async ({ context }) => {
     const actor = principal(context);
     return withRailwayTransaction(actor, async (transaction) => {
@@ -660,7 +548,7 @@ export const getBrokerDashboard = createServerFn({ method: "GET" })
   });
 
 export const submitBrokerLead = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof submitBrokerLeadSchema>) =>
     submitBrokerLeadSchema.parse(input),
   )
@@ -705,7 +593,7 @@ export const submitBrokerLead = createServerFn({ method: "POST" })
   });
 
 export const recordCompletedVehicleSale = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof recordVehicleSaleSchema>) =>
     recordVehicleSaleSchema.parse(input),
   )
@@ -768,7 +656,7 @@ export const recordCompletedVehicleSale = createServerFn({ method: "POST" })
 const deactivateWorkerSchema = z.object({ dealerId: uuid, workerId: uuid });
 
 export const deactivateDealerWorker = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof deactivateWorkerSchema>) =>
     deactivateWorkerSchema.parse(input),
   )
@@ -814,7 +702,7 @@ const createDealerWorkerSchema = z.object({
 });
 
 export const createDealerWorker = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof createDealerWorkerSchema>) =>
     createDealerWorkerSchema.parse(input),
   )
@@ -844,7 +732,7 @@ export const createDealerWorker = createServerFn({ method: "POST" })
 const setSystemActiveSchema = z.object({ active: z.boolean() });
 
 export const setRailwaySystemActive = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireRailwayAuth])
   .inputValidator((input: z.input<typeof setSystemActiveSchema>) =>
     setSystemActiveSchema.parse(input),
   )
@@ -889,7 +777,7 @@ const subscriptionPaymentSchema = z.discriminatedUnion("provider", [
 ]);
 
 export const recordSubscriptionPayment = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof subscriptionPaymentSchema>) =>
     subscriptionPaymentSchema.parse(input),
   )
@@ -936,7 +824,7 @@ const dealerDashboardSchema = z.object({
 });
 
 export const getDealerDashboard = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .inputValidator((input: z.input<typeof dealerDashboardSchema>) =>
     dealerDashboardSchema.parse(input),
   )
@@ -1103,26 +991,17 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
   });
 
 export const linkAuthenticatedWorker = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
   .handler(async ({ context }) => {
-    const { data, error } = await context.supabase.auth.getUser(
-      context.accessToken,
-    );
-    if (error) {
+    const email =
+      typeof context.claims.email === "string" ? context.claims.email : "";
+    if (!email || !context.emailVerified) {
       throw new Error(
-        `Could not verify the authenticated Supabase user: ${error.message}`,
-      );
-    }
-    if (!data.user?.email || !data.user.email_confirmed_at) {
-      throw new Error(
-        "Verify your Supabase email before linking a yard worker account.",
+        "Verify your email by signing in with Google before linking a yard worker account.",
       );
     }
 
-    const actor = {
-      userId: uuid.parse(context.userId),
-      workerEmail: data.user.email,
-    };
+    const actor = { userId: uuid.parse(context.userId), workerEmail: email };
     return withRailwayTransaction(actor, async (transaction) => {
       const [result] = await transaction<{ linked_count: number }[]>`
         select link_authenticated_worker_identity() as linked_count
@@ -1133,8 +1012,27 @@ export const linkAuthenticatedWorker = createServerFn({ method: "POST" })
     });
   });
 
+export const setAccountPassword = createServerFn({ method: "POST" })
+  .middleware([requireRailwayAuth])
+  .inputValidator((input: z.input<typeof setAccountPasswordSchema>) =>
+    setAccountPasswordSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    if (!context.emailVerified)
+      throw new Error("Sign in with Google before adding a password.");
+    const request = getRequest();
+    if (!request) throw new Error("Unauthorized: request context is unavailable.");
+    const { setPassword } = getRailwayAuth().api;
+    if (!setPassword) throw new Error("Password setup is unavailable.");
+    await setPassword({
+      body: { newPassword: data.newPassword },
+      headers: request.headers,
+    });
+    return { passwordSet: true };
+  });
+
 export const getDeveloperDashboard = createServerFn({ method: "GET" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireRailwayAuth])
   .handler(async ({ context }) => {
     await assertSuperAdmin(context);
     const actor = principal(context);
@@ -1227,7 +1125,7 @@ const setDealerAvailabilitySchema = z.object({
 });
 
 export const setDealerAvailability = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireRailwayAuth])
   .inputValidator((input: z.input<typeof setDealerAvailabilitySchema>) =>
     setDealerAvailabilitySchema.parse(input),
   )
@@ -1261,7 +1159,7 @@ export const setDealerAvailability = createServerFn({ method: "POST" })
 const deleteDealerSchema = z.object({ dealerId: uuid });
 
 export const deleteDealer = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireRailwayAuth])
   .inputValidator((input: z.input<typeof deleteDealerSchema>) =>
     deleteDealerSchema.parse(input),
   )
@@ -1286,7 +1184,7 @@ export const deleteDealer = createServerFn({ method: "POST" })
   });
 
 export const createDealerAccount = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
+  .middleware([requireRailwayAuth])
   .inputValidator((input: z.input<typeof createDealerSchema>) =>
     createDealerSchema.parse(input),
   )

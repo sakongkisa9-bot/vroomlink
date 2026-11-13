@@ -1,62 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { isBrowserSupabaseConfigured, supabase } from "@/integrations/client";
+import type { ReactNode } from "react";
+import { authClient } from "@/integrations/auth-client";
 import { PortalAuthControl } from "@/components/PortalAuthControl";
 
 export function PortalAccessGate({ children }: { children: ReactNode }) {
-  const configured = isBrowserSupabaseConfigured();
-  const [session, setSession] = useState<Session | null>(null);
-  const [checking, setChecking] = useState(configured);
-  const [error, setError] = useState("");
+  const { data: session, isPending, error } = authClient.useSession();
 
-  useEffect(() => {
-    if (!configured) {
-      setChecking(false);
-      return;
-    }
-
-    let active = true;
-    void supabase.auth
-      .getSession()
-      .then(({ data, error: sessionError }) => {
-        if (!active) return;
-        if (sessionError) {
-          console.error(
-            "Could not verify the portal sign-in session",
-            sessionError,
-          );
-          setError("We couldn't verify your sign-in. Please try again.");
-        } else {
-          setSession(data.session);
-          setError("");
-        }
-        setChecking(false);
-      })
-      .catch((sessionError: unknown) => {
-        if (!active) return;
-        console.error(
-          "Could not verify the portal sign-in session",
-          sessionError,
-        );
-        setError("We couldn't verify your sign-in. Please try again.");
-        setChecking(false);
-      });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setError("");
-      setChecking(false);
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-  }, [configured]);
-
-  if (checking) {
+  if (isPending) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
         <p role="status" className="text-sm text-muted-foreground">
@@ -77,7 +26,7 @@ export function PortalAccessGate({ children }: { children: ReactNode }) {
           </p>
           {error && (
             <p role="alert" className="mt-4 text-sm text-destructive">
-              {error}
+              We couldn&apos;t verify your sign-in. Please try again.
             </p>
           )}
           <div className="mt-6 flex justify-center">

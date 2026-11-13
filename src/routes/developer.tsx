@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/dialog";
 import { MetricCard, PortalShell } from "@/components/PortalShell";
 import { getSystemStatus } from "@/lib/catalog.functions";
-import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import {
   createDealerAccount,
   deleteDealer,
@@ -65,8 +64,7 @@ function DeveloperAdmin() {
     async (quiet = false) => {
       setLoadingDashboard(true);
       try {
-        const headers = await getSupabaseAuthHeaders();
-        const result = await loadDashboard({ headers });
+        const result = await loadDashboard();
         setDashboard(result);
         setAccessStatus("authorized");
         setAccessError("");
@@ -97,10 +95,8 @@ function DeveloperAdmin() {
   async function toggleSystem() {
     setBusy(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       const result = await setSystemActive({
         data: { active: !active },
-        headers,
       });
       setActive(result.active);
       setConfirmOpen(false);
@@ -128,7 +124,6 @@ function DeveloperAdmin() {
     const form = new FormData(formElement);
     setCreatingDealer(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       await saveDealer({
         data: {
           showroomName: String(form.get("showroomName")),
@@ -141,7 +136,6 @@ function DeveloperAdmin() {
             String(form.get("subscriptionExpiresAt")),
           ).toISOString(),
         },
-        headers,
       });
       formElement.reset();
       toast.success("Dealer workspace and owner record created.");
@@ -162,10 +156,8 @@ function DeveloperAdmin() {
     if (!yardAction) return;
     setUpdatingYards(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       const result = await updateDealerAvailability({
         data: yardAction,
-        headers,
       });
       setSelectedYardIds((selected) =>
         selected.filter((id) => !result.dealerIds.includes(id)),
@@ -193,10 +185,8 @@ function DeveloperAdmin() {
     if (!yardToDelete) return;
     setDeletingYard(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       await removeDealer({
         data: { dealerId: yardToDelete.id },
-        headers,
       });
       setSelectedYardIds((selected) =>
         selected.filter((id) => id !== yardToDelete.id),
@@ -614,7 +604,7 @@ function DeveloperAdmin() {
                                     </span>
                                     <span className="text-xs text-muted-foreground">
                                       {worker.login_linked
-                                        ? "Supabase login linked"
+                                        ? "Sign-in linked"
                                         : "Login not linked yet"}
                                       {" · "}
                                       {worker.is_active

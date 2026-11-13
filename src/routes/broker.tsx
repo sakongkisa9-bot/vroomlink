@@ -4,7 +4,6 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { MetricCard, PortalShell } from "@/components/PortalShell";
 import { formatKsh } from "@/lib/format";
-import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
 import {
   getBrokerDashboard,
   submitBrokerLead,
@@ -28,8 +27,7 @@ function BrokerDashboard() {
   async function refreshDashboard(showToast = true) {
     setLoading(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
-      const result = await loadDashboard({ headers });
+      const result = await loadDashboard();
       setDashboard(result);
       setSelectedCarId((current) =>
         result.cars.some((car) => car.id === current)
@@ -74,14 +72,12 @@ function BrokerDashboard() {
     const form = new FormData(formElement);
     setSubmitting(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       await saveLead({
         data: {
           carId: selectedCarId,
           customerName: String(form.get("customerName")),
           customerPhone: String(form.get("customerPhone")),
         },
-        headers,
       });
       formElement.reset();
       toast.success("Customer lead saved.");

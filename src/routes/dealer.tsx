@@ -13,7 +13,6 @@ import { PortalShell, MetricCard } from "@/components/PortalShell";
 import {
   createDealerWorker,
   createCarWithImportCosts,
-  createVehicleImageUploadUrls,
   deleteVehicleImageUploads,
   deactivateDealerWorker,
   getDealerDashboard,
@@ -21,8 +20,13 @@ import {
   updateDealerCar,
 } from "@/lib/railway-admin.functions";
 import { formatKsh } from "@/lib/format";
-import { supabase } from "@/integrations/client";
-import { getSupabaseAuthHeaders } from "@/integrations/supabase-auth-headers";
+import {
+  VEHICLE_IMAGE_MAX_BYTES,
+  VEHICLE_IMAGE_MAX_COUNT,
+  isVehicleImageContentType,
+  uploadVehicleImages,
+  vehicleImageIdFromUrl,
+} from "@/lib/vehicle-images";
 import { YardQrCodeButton } from "@/components/YardQrCodeButton";
 
 const pipeline = [
@@ -31,12 +35,6 @@ const pipeline = [
   { status: "PORT_CLEARING", label: "Port Clearing (Mombasa)" },
   { status: "IN_YARD", label: "In Yard" },
 ] as const;
-
-function isVehicleImageContentType(
-  type: string,
-): type is "image/jpeg" | "image/png" | "image/webp" {
-  return type === "image/jpeg" || type === "image/png" || type === "image/webp";
-}
 
 export const Route = createFileRoute("/dealer")({
   head: () => ({ meta: [{ title: "Car Dealer Console | VroomLink" }] }),
@@ -67,10 +65,8 @@ export function DealerWorkspace({
   async function loadOwnerDashboard() {
     setLoadingDashboard(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       const dashboard = await loadDashboard({
         data: { workspaceRole: expectedRole },
-        headers,
       });
       setLiveDashboard(dashboard);
       setCurrentRole(dashboard.currentRole);
@@ -107,7 +103,6 @@ export function DealerWorkspace({
     const form = new FormData(formElement);
     setCreatingWorker(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       const name = String(form.get("workerName")).trim();
       const email = String(form.get("workerEmail")).trim();
       const workspaceRole = String(form.get("workspaceRole"));
@@ -121,7 +116,6 @@ export function DealerWorkspace({
           email,
           workspaceRole,
         },
-        headers,
       });
       setLiveDashboard((current) =>
         current
@@ -163,10 +157,8 @@ export function DealerWorkspace({
     }
 
     try {
-      const headers = await getSupabaseAuthHeaders();
       await deactivateWorker({
         data: { dealerId: liveDashboard.dealerId, workerId },
-        headers,
       });
       setLiveDashboard((current) =>
         current
@@ -435,7 +427,6 @@ function EditVehicleDialog({
   onSaved: () => void;
 }) {
   const saveCar = useServerFn(updateDealerCar);
-  const createImageUploads = useServerFn(createVehicleImageUploadUrls);
   const deleteImageUploads = useServerFn(deleteVehicleImageUploads);
   const [busy, setBusy] = useState(false);
   const [images, setImages] = useState(vehicle.images);
@@ -444,42 +435,14 @@ function EditVehicleDialog({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    let uploadPaths: string[] = [];
+    let uploadedImages: string[] = [];
     setBusy(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       const statusBadge = pipeline.find(
         (stage) => stage.status === form.get("statusBadge"),
       )?.status;
       if (!statusBadge) throw new Error("Choose a valid inventory status.");
-      let uploadedImages: string[] = [];
-      if (imageFiles.length > 0) {
-        const { uploads } = await createImageUploads({
-          data: {
-            files: imageFiles.map((file) => {
-              if (!isVehicleImageContentType(file.type))
-                throw new Error(`${file.name} must be a JPEG, PNG, or WebP image.`);
-              return { contentType: file.type, size: file.size };
-            }),
-          },
-          headers,
-        });
-        uploadPaths = uploads.map((upload) => upload.path);
-        uploadedImages = await Promise.all(
-          uploads.map(async (upload, index) => {
-            const file = imageFiles[index];
-            if (!file) throw new Error("Vehicle image selection changed during upload.");
-            const { error } = await supabase.storage
-              .from("vehicle-images")
-              .uploadToSignedUrl(upload.path, upload.token, file, {
-                contentType: file.type,
-                upsert: false,
-              });
-            if (error) throw new Error(`Could not upload ${file.name}: ${error.message}`);
-            return upload.publicUrl;
-          }),
-        );
-      }
+      uploadedImages = await uploadVehicleImages(imageFiles);
       const nextImages = [...images, ...uploadedImages];
       await saveCar({
         data: {
@@ -517,22 +480,15 @@ function EditVehicleDialog({
           serviceHistory: String(form.get("serviceHistory") || "") || null,
           inspectionNotes: String(form.get("inspectionNotes") || "") || null,
         },
-        headers,
       });
-      uploadPaths = [];
-      const removedImagePaths = vehicle.images
+      uploadedImages = [];
+      const removedImageIds = vehicle.images
         .filter((image) => !images.includes(image))
-        .map((image) => {
-          const marker = "/vehicle-images/";
-          const pathStart = new URL(image).pathname.indexOf(marker);
-          return pathStart < 0
-            ? null
-            : decodeURIComponent(new URL(image).pathname.slice(pathStart + marker.length));
-        })
-        .filter((path): path is string => path !== null);
-      if (removedImagePaths.length > 0) {
+        .map(vehicleImageIdFromUrl)
+        .filter((id): id is string => id !== null);
+      if (removedImageIds.length > 0) {
         try {
-          await deleteImageUploads({ data: { paths: removedImagePaths }, headers });
+          await deleteImageUploads({ data: { imageIds: removedImageIds } });
         } catch (error) {
           console.error("Could not clean up removed vehicle images", error);
           toast.error("Vehicle saved, but removed image files could not be cleaned up.");
@@ -541,10 +497,12 @@ function EditVehicleDialog({
       toast.success("Vehicle details updated.");
       onSaved();
     } catch (error) {
-      if (uploadPaths.length > 0) {
+      const orphanedIds = uploadedImages
+        .map(vehicleImageIdFromUrl)
+        .filter((id): id is string => id !== null);
+      if (orphanedIds.length > 0) {
         try {
-          const headers = await getSupabaseAuthHeaders();
-          await deleteImageUploads({ data: { paths: uploadPaths }, headers });
+          await deleteImageUploads({ data: { imageIds: orphanedIds } });
         } catch (cleanupError) {
           console.error("Could not clean up vehicle image uploads", cleanupError);
         }
@@ -715,9 +673,9 @@ function EditVehicleDialog({
               </div>
               <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => {
                 const selected = Array.from(event.currentTarget.files ?? []);
-                const invalidFile = selected.find((file) => !isVehicleImageContentType(file.type) || file.size > 10 * 1024 * 1024);
+                const invalidFile = selected.find((file) => !isVehicleImageContentType(file.type) || file.size > VEHICLE_IMAGE_MAX_BYTES);
                 if (invalidFile) toast.error(`${invalidFile.name} must be JPEG, PNG, or WebP and no larger than 10 MB.`);
-                else if (images.length + imageFiles.length + selected.length > 12) toast.error("Add up to 12 vehicle images.");
+                else if (images.length + imageFiles.length + selected.length > VEHICLE_IMAGE_MAX_COUNT) toast.error("Add up to 12 vehicle images.");
                 else setImageFiles((current) => [...current, ...selected]);
                 event.currentTarget.value = "";
               }} className="block w-full rounded-lg border bg-background px-3 py-2 font-normal" />
@@ -772,14 +730,12 @@ function SalesManagement({
     const form = new FormData(formElement);
     setBusy(true);
     try {
-      const headers = await getSupabaseAuthHeaders();
       const result = await saveSale({
         data: {
           carId: String(form.get("carId")),
           brokerWorkerId: String(form.get("brokerWorkerId") ?? "") || null,
           finalSalePrice: Number(form.get("finalSalePrice")),
         },
-        headers,
       });
       toast.success(
         `Completed sale recorded. Broker commission: ${formatKsh(result.commissionAmountKsh)}.`,
@@ -1233,7 +1189,6 @@ function CostingDialog({
   onSaved: () => void;
 }) {
   const saveCar = useServerFn(createCarWithImportCosts);
-  const createImageUploads = useServerFn(createVehicleImageUploadUrls);
   const deleteImageUploads = useServerFn(deleteVehicleImageUploads);
   const [busy, setBusy] = useState(false);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -1258,43 +1213,9 @@ function CostingDialog({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     setBusy(true);
-    let uploadPaths: string[] = [];
+    let images: string[] = [];
     try {
-      const headers = await getSupabaseAuthHeaders();
-      let images: string[] = [];
-      if (imageFiles.length > 0) {
-        const { uploads } = await createImageUploads({
-          data: {
-            files: imageFiles.map((file) => {
-              if (!isVehicleImageContentType(file.type))
-                throw new Error(
-                  `${file.name} must be a JPEG, PNG, or WebP image.`,
-                );
-              return { contentType: file.type, size: file.size };
-            }),
-          },
-          headers,
-        });
-        uploadPaths = uploads.map((upload) => upload.path);
-        images = await Promise.all(
-          uploads.map(async (upload, index) => {
-            const file = imageFiles[index];
-            if (!file)
-              throw new Error("Vehicle image selection changed during upload.");
-            const { error } = await supabase.storage
-              .from("vehicle-images")
-              .uploadToSignedUrl(upload.path, upload.token, file, {
-                contentType: file.type,
-                upsert: false,
-              });
-            if (error)
-              throw new Error(
-                `Could not upload ${file.name}: ${error.message}`,
-              );
-            return upload.publicUrl;
-          }),
-        );
-      }
+      images = await uploadVehicleImages(imageFiles);
 
       const result = await saveCar({
         data: {
@@ -1331,9 +1252,8 @@ function CostingDialog({
           brokerCommissionRatePercent: Number(tradeTerms.commissionRate),
           images,
         },
-        headers,
       });
-      uploadPaths = [];
+      images = [];
       formElement.reset();
       setImageFiles([]);
       toast.success(
@@ -1342,10 +1262,12 @@ function CostingDialog({
       onOpenChange(false);
       onSaved();
     } catch (error) {
-      if (uploadPaths.length > 0) {
+      const orphanedIds = images
+        .map(vehicleImageIdFromUrl)
+        .filter((id): id is string => id !== null);
+      if (orphanedIds.length > 0) {
         try {
-          const headers = await getSupabaseAuthHeaders();
-          await deleteImageUploads({ data: { paths: uploadPaths }, headers });
+          await deleteImageUploads({ data: { imageIds: orphanedIds } });
         } catch (cleanupError) {
           console.error(
             "Could not clean up vehicle image uploads",
@@ -1372,7 +1294,7 @@ function CostingDialog({
     const selected = Array.from(files);
     const invalidFile = selected.find(
       (file) =>
-        !isVehicleImageContentType(file.type) || file.size > 10 * 1024 * 1024,
+        !isVehicleImageContentType(file.type) || file.size > VEHICLE_IMAGE_MAX_BYTES,
     );
     if (invalidFile) {
       toast.error(
@@ -1380,7 +1302,7 @@ function CostingDialog({
       );
       return;
     }
-    if (imageFiles.length + selected.length > 12) {
+    if (imageFiles.length + selected.length > VEHICLE_IMAGE_MAX_COUNT) {
       toast.error("Add up to 12 vehicle images.");
       return;
     }

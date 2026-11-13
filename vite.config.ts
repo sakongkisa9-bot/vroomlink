@@ -17,7 +17,6 @@ export default defineConfig({
         "sonner",
         "zod",
         "lucide-react",
-        "@supabase/supabase-js",
         "@radix-ui/react-dialog",
         "@radix-ui/react-slot",
         "class-variance-authority",

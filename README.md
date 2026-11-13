@@ -30,25 +30,29 @@ npm run dev
 
 ## Railway PostgreSQL
 
-The public vehicle catalog and booking-deposit flow use Railway PostgreSQL. Supabase
-Auth remains the identity provider for protected server functions. Configure
-`DATABASE_URL`, `SUPABASE_URL`, and `SUPABASE_PUBLISHABLE_KEY` only in the server
-environment. Configure `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`
-as Railway build variables because Vite embeds them into the browser bundle.
-Set the Supabase URL to the project root (for example,
-`https://<project-ref>.supabase.co`), not an `/auth/v1` or `/rest/v1` endpoint.
-Never expose `DATABASE_URL` or a Supabase service-role key through a `VITE_`
-variable.
-For Google sign-in, enable the Google provider under Supabase Authentication
-providers and configure its Google OAuth client callback. Set the Supabase Site
-URL to the deployed app origin and allowlist the app's sign-in redirect URL.
+The public vehicle catalog, booking deposits, authentication, and vehicle photos
+all use Railway PostgreSQL; there is no Supabase dependency. Sign-in is handled
+by [Better Auth](https://www.better-auth.com) with Google and email/password,
+stored in the Railway database and carried in a secure session cookie. Set these
+server environment variables (never expose them through a `VITE_` variable):
+
+- `DATABASE_URL`: the Railway PostgreSQL connection string.
+- `BETTER_AUTH_URL`: the deployed app origin, for example `https://app.example.com`.
+- `BETTER_AUTH_SECRET`: a random string of at least 32 characters.
+- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`: a Google OAuth web client whose
+  authorized redirect URI is `<BETTER_AUTH_URL>/api/auth/callback/google`.
+
+Staff prove ownership of their assigned email by signing in with Google first;
+that verified sign-in links the matching worker record. Afterwards they can add
+an email password from the account menu. Public email sign-up is disabled so an
+unverified account can never claim a worker's access. Super-admins are the rows
+in `platform_admins`; add one with a verified sign-in email, for example
+`insert into platform_admins (email) values ('you@example.com');`.
 
 For Railway, build with `npm run build` and start with `npm start`. The start
 script uses Railway's injected `PORT`; it defaults to port `8080` for local or
-container environments that do not provide one. Public catalog requests do not
-initialize Supabase Auth when Supabase client credentials are absent. Protected
-dealer and super-admin operations still require a valid Supabase session and
-server credentials.
+container environments that do not provide one. Vehicle photos are stored in the
+`vehicle_images` table and served from `/api/vehicle-images/<id>`.
 
 The initial Railway schema and demo catalog are in
 [`railway/migrations/0001_vroomlink.sql`](./railway/migrations/0001_vroomlink.sql).
@@ -65,6 +69,8 @@ npm run db:migrate -- 0005_dealer_availability.sql
 npm run db:migrate -- 0006_developer_yard_deletion.sql
 npm run db:migrate -- 0007_add_broker_workspace_role.sql
 npm run db:migrate -- 0008_separate_broker_and_salesperson_roles.sql
+npm run db:migrate -- 0009_vehicle_details.sql
+npm run db:migrate -- 0010_railway_auth_and_images.sql
 ```
 
 The migration runner executes the checked-in SQL file using the project's
@@ -80,11 +86,16 @@ variable or client-side code.
 The seeded vehicle rows preserve the current demo catalog only. Existing live
 Supabase inventory, memberships, and subscription data are not copied by these
 migrations and must be exported and imported before switching production
-traffic to Railway. After the worker-link migration is applied, a verified
-Supabase session automatically links any active, unlinked worker rows with the
-same email address. The operation cannot change an existing user mapping;
-admins must provision the worker row with the matching email before the worker
-signs in.
+traffic to Railway. Migration `0010` clears every worker's old Supabase user ID;
+each worker re-links by signing in with Google using the email on their worker
+record, and Supabase passwords cannot be transferred, so workers set a new
+password after that first sign-in. The linking operation cannot change an
+existing user mapping; admins must provision the worker row with the matching
+email before the worker signs in.
+
+Existing listing photos hosted by Supabase are not copied by migration `0010`.
+Before removing Supabase storage, export those images and re-upload them through
+the vehicle editor, then remove the old photo URLs from each listing.
 
 The broker and sales workflow is added by `0003_broker_sales.sql`. Apply it
 after the first two migrations. It creates private per-vehicle wholesale and
@@ -99,13 +110,13 @@ dealer UUID is also exposed as the tenant `yard_id`, and role checks in the
 migration use security-definer `yard_role_of()` and `has_role()` helpers.
 Migration `0004_super_admin_dealer_provisioning.sql` grants the application
 role permission to create dealer and owner records only after the backend has
-verified a Supabase `super_admin` role. The developer panel uses this flow and
+verified a super-admin from `platform_admins`. The developer panel uses this flow and
 does not rely on a hardcoded client-side password.
 Migration `0005_dealer_availability.sql` adds developer-controlled per-yard
 shutdowns. A shut-down yard is blocked from worker access and its listings and
 booking deposits are unavailable until a super-admin restores it. The Developer
 Panel displays the yard's registered staff names, roles, sign-in emails, and
-whether each email has been linked to Supabase Auth; passwords are never
+whether each email has been linked to a sign-in; passwords are never
 available to the application.
 
 The public home page lists active yards; each yard's public catalog is available

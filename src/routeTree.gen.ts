@@ -14,8 +14,11 @@ import { Route as BrokerRouteImport } from './routes/broker'
 import { Route as DealerRouteImport } from './routes/dealer'
 import { Route as DeveloperRouteImport } from './routes/developer'
 import { Route as SalespersonRouteImport } from './routes/salesperson'
+import { Route as ApiVehicleImagesRouteImport } from './routes/api.vehicle-images'
 import { Route as CarsIdRouteImport } from './routes/cars.$id'
 import { Route as YardSlugRouteImport } from './routes/yard.$slug'
+import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
+import { Route as ApiVehicleImagesIdRouteImport } from './routes/api.vehicle-images.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -42,6 +45,11 @@ const SalespersonRoute = SalespersonRouteImport.update({
   path: '/salesperson',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiVehicleImagesRoute = ApiVehicleImagesRouteImport.update({
+  id: '/api/vehicle-images',
+  path: '/api/vehicle-images',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CarsIdRoute = CarsIdRouteImport.update({
   id: '/cars/$id',
   path: '/cars/$id',
@@ -52,6 +60,16 @@ const YardSlugRoute = YardSlugRouteImport.update({
   path: '/yard/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiVehicleImagesIdRoute = ApiVehicleImagesIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => ApiVehicleImagesRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -59,8 +77,11 @@ export interface FileRoutesByFullPath {
   '/dealer': typeof DealerRoute
   '/developer': typeof DeveloperRoute
   '/salesperson': typeof SalespersonRoute
+  '/api/vehicle-images': typeof ApiVehicleImagesRouteWithChildren
   '/cars/$id': typeof CarsIdRoute
   '/yard/$slug': typeof YardSlugRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/vehicle-images/$id': typeof ApiVehicleImagesIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -68,8 +89,11 @@ export interface FileRoutesByTo {
   '/dealer': typeof DealerRoute
   '/developer': typeof DeveloperRoute
   '/salesperson': typeof SalespersonRoute
+  '/api/vehicle-images': typeof ApiVehicleImagesRouteWithChildren
   '/cars/$id': typeof CarsIdRoute
   '/yard/$slug': typeof YardSlugRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/vehicle-images/$id': typeof ApiVehicleImagesIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -78,8 +102,11 @@ export interface FileRoutesById {
   '/dealer': typeof DealerRoute
   '/developer': typeof DeveloperRoute
   '/salesperson': typeof SalespersonRoute
+  '/api/vehicle-images': typeof ApiVehicleImagesRouteWithChildren
   '/cars/$id': typeof CarsIdRoute
   '/yard/$slug': typeof YardSlugRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/vehicle-images/$id': typeof ApiVehicleImagesIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -89,8 +116,11 @@ export interface FileRouteTypes {
     | '/dealer'
     | '/developer'
     | '/salesperson'
+    | '/api/vehicle-images'
     | '/cars/$id'
     | '/yard/$slug'
+    | '/api/auth/$'
+    | '/api/vehicle-images/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -98,8 +128,11 @@ export interface FileRouteTypes {
     | '/dealer'
     | '/developer'
     | '/salesperson'
+    | '/api/vehicle-images'
     | '/cars/$id'
     | '/yard/$slug'
+    | '/api/auth/$'
+    | '/api/vehicle-images/$id'
   id:
     | '__root__'
     | '/'
@@ -107,8 +140,11 @@ export interface FileRouteTypes {
     | '/dealer'
     | '/developer'
     | '/salesperson'
+    | '/api/vehicle-images'
     | '/cars/$id'
     | '/yard/$slug'
+    | '/api/auth/$'
+    | '/api/vehicle-images/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -117,8 +153,10 @@ export interface RootRouteChildren {
   DealerRoute: typeof DealerRoute
   DeveloperRoute: typeof DeveloperRoute
   SalespersonRoute: typeof SalespersonRoute
+  ApiVehicleImagesRoute: typeof ApiVehicleImagesRouteWithChildren
   CarsIdRoute: typeof CarsIdRoute
   YardSlugRoute: typeof YardSlugRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -158,6 +196,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SalespersonRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/vehicle-images': {
+      id: '/api/vehicle-images'
+      path: '/api/vehicle-images'
+      fullPath: '/api/vehicle-images'
+      preLoaderRoute: typeof ApiVehicleImagesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/cars/$id': {
       id: '/cars/$id'
       path: '/cars/$id'
@@ -172,8 +217,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof YardSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/vehicle-images/$id': {
+      id: '/api/vehicle-images/$id'
+      path: '/$id'
+      fullPath: '/api/vehicle-images/$id'
+      preLoaderRoute: typeof ApiVehicleImagesIdRouteImport
+      parentRoute: typeof ApiVehicleImagesRoute
+    }
   }
 }
+
+interface ApiVehicleImagesRouteChildren {
+  ApiVehicleImagesIdRoute: typeof ApiVehicleImagesIdRoute
+}
+
+const ApiVehicleImagesRouteChildren: ApiVehicleImagesRouteChildren = {
+  ApiVehicleImagesIdRoute: ApiVehicleImagesIdRoute,
+}
+
+const ApiVehicleImagesRouteWithChildren =
+  ApiVehicleImagesRoute._addFileChildren(ApiVehicleImagesRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -181,8 +251,10 @@ const rootRouteChildren: RootRouteChildren = {
   DealerRoute: DealerRoute,
   DeveloperRoute: DeveloperRoute,
   SalespersonRoute: SalespersonRoute,
+  ApiVehicleImagesRoute: ApiVehicleImagesRouteWithChildren,
   CarsIdRoute: CarsIdRoute,
   YardSlugRoute: YardSlugRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
