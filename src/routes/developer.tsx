@@ -132,6 +132,8 @@ function DeveloperAdmin() {
           whatsappPhone: String(form.get("whatsappPhone")),
           ownerName: String(form.get("ownerName")),
           ownerEmail: String(form.get("ownerEmail")),
+          ownerTemporaryPassword:
+            String(form.get("ownerTemporaryPassword") ?? "") || null,
           subscriptionExpiresAt: new Date(
             String(form.get("subscriptionExpiresAt")),
           ).toISOString(),
@@ -389,6 +391,18 @@ function DeveloperAdmin() {
                   required
                   maxLength={254}
                   className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+                />
+              </label>
+              <label className="space-y-1.5 text-sm font-medium sm:col-span-2">
+                Owner temporary password (optional)
+                <input
+                  name="ownerTemporaryPassword"
+                  type="text"
+                  autoComplete="off"
+                  minLength={8}
+                  maxLength={128}
+                  placeholder="Leave blank if the owner will use Google sign-in"
+                  className="h-10 w-full rounded-lg border bg-background px-3 font-normal sm:max-w-sm"
                 />
               </label>
               <label className="space-y-1.5 text-sm font-medium sm:col-span-2">

@@ -26,6 +26,8 @@ async function uploadImages({ request }: { request: Request }) {
 
   const session = await getRailwayAuth().api.getSession({ headers: request.headers });
   if (!session) return json({ error: "Sign in to upload vehicle images." }, 401);
+  if ((session.user as { mustChangePassword?: boolean }).mustChangePassword)
+    return json({ error: "Change your temporary password first." }, 403);
 
   const files = (await request.formData())
     .getAll("files")

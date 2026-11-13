@@ -115,6 +115,7 @@ export function DealerWorkspace({
           fullName: name,
           email,
           workspaceRole,
+          temporaryPassword: String(form.get("temporaryPassword") ?? "") || null,
         },
       });
       setLiveDashboard((current) =>
@@ -136,7 +137,9 @@ export function DealerWorkspace({
       );
       formElement.reset();
       toast.success(
-        `${workspaceRole === "BROKER" ? "Broker" : "Salesperson"} added. They can sign in using this email.`,
+        result.loginCreated
+          ? `${workspaceRole === "BROKER" ? "Broker" : "Salesperson"} added. Share the temporary password privately; they must change it on first sign-in.`
+          : `${workspaceRole === "BROKER" ? "Broker" : "Salesperson"} added. They can sign in with Google using this email.`,
       );
     } catch (error) {
       console.error("Could not add dealer staff", error);
@@ -1062,7 +1065,7 @@ function StaffTable({
       {canManageStaff && liveStaff && (
         <form
           onSubmit={onCreateWorker}
-          className="mb-5 grid gap-3 rounded-xl border bg-muted/30 p-4 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end"
+          className="mb-5 grid gap-3 rounded-xl border bg-muted/30 p-4 sm:grid-cols-2 sm:items-end"
         >
           <label className="space-y-1.5 text-sm font-medium">
             Staff full name
@@ -1094,6 +1097,18 @@ function StaffTable({
               <option value="SALESPERSON">Salesperson</option>
               <option value="BROKER">Broker</option>
             </select>
+          </label>
+          <label className="space-y-1.5 text-sm font-medium">
+            Temporary password (optional)
+            <input
+              name="temporaryPassword"
+              type="text"
+              autoComplete="off"
+              minLength={8}
+              maxLength={128}
+              placeholder="Leave blank to use Google sign-in"
+              className="h-10 w-full rounded-lg border bg-background px-3 font-normal"
+            />
           </label>
           <button
             type="submit"

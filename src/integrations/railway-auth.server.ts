@@ -13,22 +13,54 @@ function createAuth() {
   const googleClientId = process.env["GOOGLE_CLIENT_ID"];
   const googleClientSecret = process.env["GOOGLE_CLIENT_SECRET"];
 
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+  });
+
   return betterAuth({
     appName: "VroomLink",
     baseURL,
     secret,
     trustedOrigins: [baseURL],
-    database: new Pool({
-      connectionString: databaseUrl,
-      ssl: { rejectUnauthorized: false },
-      max: 5,
-    }),
-    // Accounts are created by Google sign-in; passwords are added afterwards via setPassword.
+    database: pool,
+    // Accounts come from Google sign-in or an owner-issued temporary password, never public sign-up.
     emailAndPassword: { enabled: true, disableSignUp: true },
     socialProviders:
       googleClientId && googleClientSecret
         ? { google: { clientId: googleClientId, clientSecret: googleClientSecret } }
         : {},
+    user: {
+      additionalFields: {
+        mustChangePassword: {
+          type: "boolean",
+          required: false,
+          defaultValue: false,
+          input: false,
+        },
+      },
+    },
+    databaseHooks: {
+      account: {
+        create: {
+          // Google proves mailbox ownership, so an owner-set temporary password must stop working.
+          after: async (account) => {
+            if (account.providerId === "credential") return;
+            await pool.query(
+              `delete from account
+               where "userId" = $1::uuid and "providerId" = 'credential'
+                 and exists (select 1 from "user" where id = $1::uuid and "mustChangePassword")`,
+              [account.userId],
+            );
+            await pool.query(
+              `update "user" set "mustChangePassword" = false where id = $1::uuid`,
+              [account.userId],
+            );
+          },
+        },
+      },
+    },
     advanced: { database: { generateId: "uuid" } },
   });
 }

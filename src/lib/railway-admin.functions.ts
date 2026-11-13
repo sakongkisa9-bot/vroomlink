@@ -3,7 +3,7 @@ import { getRequest } from "@tanstack/react-start/server";
 import type { TransactionSql } from "postgres";
 import { z } from "zod";
 import { requireRailwaySystemActiveMiddleware } from "@/integrations/railway-middleware";
-import { requireRailwayAuth } from "@/integrations/railway-auth-middleware";
+import { requireRailwayAuth, requireRailwayAuthAllowingTemporaryPassword } from "@/integrations/railway-auth-middleware";
 import { getRailwayAuth } from "@/integrations/railway-auth.server";
 import { getRailwayClient, withRailwayTransaction } from "./railway.server";
 
@@ -87,6 +87,11 @@ const deleteVehicleImageUploadsSchema = z.object({
 const setAccountPasswordSchema = z.object({
   newPassword: z.string().min(8).max(128),
 });
+const temporaryPassword = z.string().min(8).max(128);
+const changeTemporaryPasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: temporaryPassword,
+});
 const submitBrokerLeadSchema = z.object({
   carId: uuid,
   customerName: z.string().trim().min(1).max(160),
@@ -125,6 +130,7 @@ const createDealerSchema = z.object({
     .regex(/^[+()\d\s-]+$/, "Enter a valid contact number."),
   ownerName: z.string().trim().min(2).max(160),
   ownerEmail: z.string().trim().email().max(254),
+  ownerTemporaryPassword: temporaryPassword.nullable().optional(),
   subscriptionExpiresAt: z
     .string()
     .datetime()
@@ -138,6 +144,34 @@ type AuthContext = {
   claims: { email?: unknown };
   emailVerified: boolean;
 };
+
+// Returns null when the email already has a login, so an owner can never overwrite someone else's account.
+async function provisionTemporaryLogin(input: {
+  email: string;
+  fullName: string;
+  password: string;
+}): Promise<string | null> {
+  const { internalAdapter, password } = await getRailwayAuth().$context;
+  const email = input.email.trim().toLowerCase();
+  if (await internalAdapter.findUserByEmail(email)) return null;
+
+  const user = await internalAdapter.createUser(
+    {
+      email,
+      name: input.fullName,
+      emailVerified: false,
+      mustChangePassword: true,
+    },
+    { method: "admin" },
+  );
+  await internalAdapter.linkAccount({
+    userId: user.id,
+    providerId: "credential",
+    accountId: user.id,
+    password: await password.hash(input.password),
+  });
+  return user.id;
+}
 
 function principal(context: { userId: string; claims: { email?: unknown } }) {
   return {
@@ -699,6 +733,7 @@ const createDealerWorkerSchema = z.object({
   fullName: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(254),
   workspaceRole: z.enum(["SALESPERSON", "BROKER"]),
+  temporaryPassword: temporaryPassword.nullable().optional(),
 });
 
 export const createDealerWorker = createServerFn({ method: "POST" })
@@ -725,7 +760,23 @@ export const createDealerWorker = createServerFn({ method: "POST" })
         throw new Error(
           "A worker with this email already exists in this yard.",
         );
-      return { workerId: worker.id };
+
+      let loginCreated = false;
+      if (data.temporaryPassword) {
+        const userId = await provisionTemporaryLogin({
+          email: data.email,
+          fullName: data.fullName,
+          password: data.temporaryPassword,
+        });
+        if (userId) {
+          await transaction`
+            update workers set auth_user_id = ${userId}
+            where id = ${worker.id} and dealer_id = ${data.dealerId}
+          `;
+          loginCreated = true;
+        }
+      }
+      return { workerId: worker.id, loginCreated };
     });
   });
 
@@ -991,15 +1042,16 @@ export const getDealerDashboard = createServerFn({ method: "GET" })
   });
 
 export const linkAuthenticatedWorker = createServerFn({ method: "POST" })
-  .middleware([requireRailwayAuth, requireRailwaySystemActiveMiddleware])
+  .middleware([
+    requireRailwayAuthAllowingTemporaryPassword,
+    requireRailwaySystemActiveMiddleware,
+  ])
   .handler(async ({ context }) => {
     const email =
       typeof context.claims.email === "string" ? context.claims.email : "";
-    if (!email || !context.emailVerified) {
-      throw new Error(
-        "Verify your email by signing in with Google before linking a yard worker account.",
-      );
-    }
+    // Owner-issued logins are linked at creation; only Google-verified emails are linked here.
+    if (!email || !context.emailVerified || context.mustChangePassword)
+      return { linkedWorkers: 0 };
 
     const actor = { userId: uuid.parse(context.userId), workerEmail: email };
     return withRailwayTransaction(actor, async (transaction) => {
@@ -1010,6 +1062,34 @@ export const linkAuthenticatedWorker = createServerFn({ method: "POST" })
         throw new Error("Worker identity linking returned no result.");
       return { linkedWorkers: Number(result.linked_count) };
     });
+  });
+
+export const changeTemporaryPassword = createServerFn({ method: "POST" })
+  .middleware([requireRailwayAuthAllowingTemporaryPassword])
+  .inputValidator((input: z.input<typeof changeTemporaryPasswordSchema>) =>
+    changeTemporaryPasswordSchema.parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    if (!context.mustChangePassword)
+      throw new Error("Your password does not need to be replaced.");
+    if (data.newPassword === data.currentPassword)
+      throw new Error("Choose a new password that differs from the temporary one.");
+    const request = getRequest();
+    if (!request) throw new Error("Unauthorized: request context is unavailable.");
+
+    // Throws when the temporary password is wrong, so the flag below is never cleared without a real change.
+    await getRailwayAuth().api.changePassword({
+      body: {
+        currentPassword: data.currentPassword,
+        newPassword: data.newPassword,
+      },
+      headers: request.headers,
+    });
+    await getRailwayClient()`
+      update "user" set "mustChangePassword" = false
+      where id = ${uuid.parse(context.userId)}::uuid
+    `;
+    return { changed: true };
   });
 
 export const setAccountPassword = createServerFn({ method: "POST" })
@@ -1210,15 +1290,30 @@ export const createDealerAccount = createServerFn({ method: "POST" })
         `;
         if (!dealer) throw new Error("Could not create the dealer account.");
 
+        const ownerUserId = data.ownerTemporaryPassword
+          ? await provisionTemporaryLogin({
+              email: data.ownerEmail,
+              fullName: data.ownerName,
+              password: data.ownerTemporaryPassword,
+            })
+          : null;
         const [owner] = await transaction<{ id: string }[]>`
-          insert into workers (dealer_id, full_name, email, workspace_role)
-          values (${dealer.id}, ${data.ownerName}, ${data.ownerEmail}, 'OWNER')
+          insert into workers (
+            dealer_id, full_name, email, workspace_role, auth_user_id
+          )
+          values (
+            ${dealer.id}, ${data.ownerName}, ${data.ownerEmail}, 'OWNER', ${ownerUserId}
+          )
           returning id
         `;
         if (!owner)
           throw new Error("Could not create the dealer owner account.");
 
-        return { dealerId: dealer.id, ownerWorkerId: owner.id };
+        return {
+          dealerId: dealer.id,
+          ownerWorkerId: owner.id,
+          loginCreated: ownerUserId !== null,
+        };
       },
     );
   });

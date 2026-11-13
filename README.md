@@ -45,7 +45,13 @@ server environment variables (never expose them through a `VITE_` variable):
 Staff prove ownership of their assigned email by signing in with Google first;
 that verified sign-in links the matching worker record. Afterwards they can add
 an email password from the account menu. Public email sign-up is disabled so an
-unverified account can never claim a worker's access. Super-admins are the rows
+unverified account can never claim a worker's access. Staff without a Google
+account can instead be given a temporary password: the developer sets one when
+registering an owner and owners set one when adding staff. That creates the login
+and links the worker immediately, and the worker is forced to choose their own
+password on first sign-in (blocked from every protected action until then). If an
+owner-issued account later signs in with Google, the temporary password is
+deleted. Super-admins are the rows
 in `platform_admins`; add one with a verified sign-in email, for example
 `insert into platform_admins (email) values ('you@example.com');`.
 
@@ -71,6 +77,7 @@ npm run db:migrate -- 0007_add_broker_workspace_role.sql
 npm run db:migrate -- 0008_separate_broker_and_salesperson_roles.sql
 npm run db:migrate -- 0009_vehicle_details.sql
 npm run db:migrate -- 0010_railway_auth_and_images.sql
+npm run db:migrate -- 0011_temporary_passwords.sql
 ```
 
 The migration runner executes the checked-in SQL file using the project's
