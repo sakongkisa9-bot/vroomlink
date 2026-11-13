@@ -59,7 +59,7 @@ export function SiteHeader({
                 <Link to="/salesperson">Salesperson Workspace</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <Link to="/dealer">Car Dealer Console</Link>
+                <Link to="/dealer">Owner Workspace</Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link to="/developer">Developer Admin Panel</Link>

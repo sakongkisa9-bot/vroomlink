@@ -38,7 +38,7 @@ const pipeline = [
 ] as const;
 
 export const Route = createFileRoute("/dealer")({
-  head: () => ({ meta: [{ title: "Car Dealer Console | VroomLink" }] }),
+  head: () => ({ meta: [{ title: "Owner Workspace | VroomLink" }] }),
   component: () => <DealerWorkspace expectedRole="OWNER" />,
 });
 

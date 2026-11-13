@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { SiteHeader } from "@/components/SiteHeader";
 import { MetricCard, PortalShell } from "@/components/PortalShell";
 import { formatKsh } from "@/lib/format";
 import {
@@ -94,41 +95,59 @@ function BrokerDashboard() {
     }
   }
 
+  if (!dashboard) {
+    return (
+      <div className="min-h-screen bg-background">
+        <SiteHeader />
+        <main className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-7xl items-center justify-center px-4 py-10">
+          <section className="max-w-md text-center">
+            <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+              Broker access
+            </p>
+            <h1 className="mt-3 text-3xl font-bold">Broker Workspace</h1>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Load your assigned workspace to see inventory, leads, and
+              commissions.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refreshDashboard()}
+              disabled={loading}
+              className="mt-6 h-11 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
+            >
+              {loading ? "Loading workspace…" : "Load broker workspace"}
+            </button>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <PortalShell
-      title="Broker Dashboard"
+      title="Broker Workspace"
       description="Your private yard inventory, customer leads, and completed-sale commissions."
     >
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-card p-4">
-        <p className="text-sm text-muted-foreground">
-          Sign in with an active broker worker account to load your yard
-          records.
-        </p>
+      <div className="mb-6 flex justify-end">
         <button
           type="button"
           onClick={() => void refreshDashboard()}
           disabled={loading}
           className="h-10 rounded-lg border px-4 text-sm font-semibold disabled:opacity-50"
         >
-          {loading
-            ? "Loading…"
-            : dashboard
-              ? "Refresh broker records"
-              : "Load broker records"}
+          {loading ? "Refreshing…" : "Refresh workspace"}
         </button>
       </div>
 
       <section className="grid gap-4 sm:grid-cols-2">
         <MetricCard
           label="Commissions Earned (KSh)"
-          value={
-            dashboard ? formatKsh(Number(dashboard.commissionEarnedKsh)) : "—"
-          }
+          value={formatKsh(Number(dashboard.commissionEarnedKsh))}
           detail="Recorded only after a dealer completes a vehicle sale"
         />
         <MetricCard
           label="Active Leads"
-          value={dashboard ? String(dashboard.activeLeadCount) : "—"}
+          value={String(dashboard.activeLeadCount)}
           detail="Your new and contacted customer leads"
         />
       </section>
@@ -186,17 +205,6 @@ function BrokerDashboard() {
                   >
                     No active vehicles with broker terms are available in your
                     yard.
-                  </td>
-                </tr>
-              )}
-              {!dashboard && (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-3 py-8 text-center text-muted-foreground"
-                  >
-                    Load your authenticated broker account to view private
-                    inventory.
                   </td>
                 </tr>
               )}
@@ -292,11 +300,6 @@ function BrokerDashboard() {
                 You have not submitted any customer leads yet.
               </p>
             )}
-            {!dashboard && (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Load your broker account to see customer leads.
-              </p>
-            )}
           </div>
         </section>
       </div>
@@ -345,16 +348,6 @@ function BrokerDashboard() {
                     className="px-3 py-6 text-center text-muted-foreground"
                   >
                     No completed-sale commissions have been recorded.
-                  </td>
-                </tr>
-              )}
-              {!dashboard && (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-3 py-6 text-center text-muted-foreground"
-                  >
-                    Load your broker account to view commission records.
                   </td>
                 </tr>
               )}

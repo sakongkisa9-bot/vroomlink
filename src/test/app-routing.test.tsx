@@ -18,7 +18,7 @@ describe("App routing", () => {
     expect(matches.at(-1)?.routeId).not.toBe(rootRouteId);
   });
 
-  it("matches yard marketplaces and the salesperson workspace", () => {
+  it("matches the owner and salesperson workspaces and yard marketplaces", () => {
     const router = createRouter({
       routeTree,
       context: { queryClient: new QueryClient() },
@@ -30,5 +30,6 @@ describe("App routing", () => {
     expect(router.matchRoutes("/salesperson").at(-1)?.routeId).toBe(
       "/salesperson",
     );
+    expect(router.matchRoutes("/dealer").at(-1)?.routeId).toBe("/dealer");
   });
 });
